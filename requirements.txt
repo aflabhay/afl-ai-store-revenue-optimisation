@@ -1,0 +1,23 @@
+# Core solver
+pulp>=2.7.0
+
+# Data processing
+pandas>=2.0.0
+numpy>=1.24.0
+openpyxl>=3.1.0
+
+# Streamlit app
+streamlit>=1.32.0
+
+# Database (Fabric connection — not needed for dummy data mode)
+# pyodbc>=5.0.0
+
+# Notebooks
+jupyter>=1.0.0
+
+# Testing
+pytest>=7.4.0
+
+# Utilities
+python-dotenv>=1.0.0
+pyyaml>=6.0.0

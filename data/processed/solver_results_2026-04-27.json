@@ -1,0 +1,922 @@
+[
+  {
+    "store_id": 8171,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 35493.67,
+        "floor_share": 2,
+        "cap_share": 5,
+        "style_slots": 7,
+        "expected_rev_index": 70987.34,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 20,
+        "revenue_rate": 147978.84,
+        "floor_share": 7,
+        "cap_share": 20,
+        "style_slots": 74,
+        "expected_rev_index": 2959576.72,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 94402.78,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 14,
+        "expected_rev_index": 377611.11,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 5,
+        "revenue_rate": 103631.21,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 18,
+        "expected_rev_index": 518156.03,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 21037.5,
+        "floor_share": 1,
+        "cap_share": 3,
+        "style_slots": 3,
+        "expected_rev_index": 21037.5,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 19,
+        "revenue_rate": 141728.03,
+        "floor_share": 6,
+        "cap_share": 19,
+        "style_slots": 70,
+        "expected_rev_index": 2692832.64,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 25,
+        "revenue_rate": 186081.97,
+        "floor_share": 8,
+        "cap_share": 25,
+        "style_slots": 92,
+        "expected_rev_index": 4652049.18,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 3,
+        "revenue_rate": 66959.25,
+        "floor_share": 3,
+        "cap_share": 9,
+        "style_slots": 11,
+        "expected_rev_index": 200877.74,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 78792.21,
+        "floor_share": 4,
+        "cap_share": 11,
+        "style_slots": 14,
+        "expected_rev_index": 315168.83,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Economy",
+        "display_share_pct": 3,
+        "revenue_rate": 55479.17,
+        "floor_share": 3,
+        "cap_share": 8,
+        "style_slots": 11,
+        "expected_rev_index": 166437.5,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 67049.18,
+        "floor_share": 3,
+        "cap_share": 9,
+        "style_slots": 11,
+        "expected_rev_index": 201147.54,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 11,
+        "revenue_rate": 106872.13,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 40,
+        "expected_rev_index": 1175593.44,
+        "signal": "HOLD"
+      }
+    ],
+    "total_expected_revenue_index": 13351475.57,
+    "style_slots_used": 365,
+    "display_capacity": 370,
+    "message": "OK"
+  },
+  {
+    "store_id": 8194,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 27880.6,
+        "floor_share": 1,
+        "cap_share": 3,
+        "style_slots": 4,
+        "expected_rev_index": 27880.6,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 23,
+        "revenue_rate": 190379.86,
+        "floor_share": 8,
+        "cap_share": 23,
+        "style_slots": 108,
+        "expected_rev_index": 4378736.84,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 63588.79,
+        "floor_share": 3,
+        "cap_share": 8,
+        "style_slots": 14,
+        "expected_rev_index": 190766.36,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 29,
+        "revenue_rate": 242250.0,
+        "floor_share": 10,
+        "cap_share": 29,
+        "style_slots": 136,
+        "expected_rev_index": 7025250.0,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 51756.1,
+        "floor_share": 2,
+        "cap_share": 6,
+        "style_slots": 9,
+        "expected_rev_index": 103512.2,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 91453.49,
+        "floor_share": 4,
+        "cap_share": 11,
+        "style_slots": 18,
+        "expected_rev_index": 365813.95,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 24,
+        "revenue_rate": 200305.42,
+        "floor_share": 8,
+        "cap_share": 24,
+        "style_slots": 112,
+        "expected_rev_index": 4807330.05,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 30647.89,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 4,
+        "expected_rev_index": 30647.89,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 108301.26,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 18,
+        "expected_rev_index": 433205.02,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 137408.81,
+        "floor_share": 5,
+        "cap_share": 16,
+        "style_slots": 23,
+        "expected_rev_index": 687044.03,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 4,
+        "revenue_rate": 106872.13,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 18,
+        "expected_rev_index": 427488.52,
+        "signal": "REDUCE"
+      }
+    ],
+    "total_expected_revenue_index": 18477675.45,
+    "style_slots_used": 464,
+    "display_capacity": 470,
+    "message": "OK"
+  },
+  {
+    "store_id": 8254,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Economy",
+        "display_share_pct": 3,
+        "revenue_rate": 52728.4,
+        "floor_share": 3,
+        "cap_share": 8,
+        "style_slots": 12,
+        "expected_rev_index": 158185.19,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 19,
+        "revenue_rate": 119909.87,
+        "floor_share": 6,
+        "cap_share": 19,
+        "style_slots": 79,
+        "expected_rev_index": 2278287.55,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 62357.14,
+        "floor_share": 3,
+        "cap_share": 10,
+        "style_slots": 12,
+        "expected_rev_index": 187071.43,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 5,
+        "revenue_rate": 96075.95,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 21,
+        "expected_rev_index": 480379.75,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 26400.0,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 4,
+        "expected_rev_index": 26400.0,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 79635.47,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 16,
+        "expected_rev_index": 318541.87,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 39,
+        "revenue_rate": 240832.71,
+        "floor_share": 13,
+        "cap_share": 39,
+        "style_slots": 164,
+        "expected_rev_index": 9392475.84,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 3,
+        "revenue_rate": 48803.57,
+        "floor_share": 3,
+        "cap_share": 8,
+        "style_slots": 12,
+        "expected_rev_index": 146410.7,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 6,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 16,
+        "style_slots": 25,
+        "expected_rev_index": 613373.96,
+        "signal": "HOLD"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 17,
+        "revenue_rate": 106872.13,
+        "floor_share": 6,
+        "cap_share": 17,
+        "style_slots": 71,
+        "expected_rev_index": 1816826.23,
+        "signal": "INCREASE"
+      }
+    ],
+    "total_expected_revenue_index": 15417952.51,
+    "style_slots_used": 416,
+    "display_capacity": 421,
+    "message": "OK"
+  },
+  {
+    "store_id": 2031,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 22,
+        "revenue_rate": 152756.19,
+        "floor_share": 7,
+        "cap_share": 22,
+        "style_slots": 96,
+        "expected_rev_index": 3360636.18,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 73449.57,
+        "floor_share": 4,
+        "cap_share": 11,
+        "style_slots": 17,
+        "expected_rev_index": 293798.27,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 21,
+        "revenue_rate": 147319.05,
+        "floor_share": 7,
+        "cap_share": 21,
+        "style_slots": 92,
+        "expected_rev_index": 3093700.09,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 104272.33,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 22,
+        "expected_rev_index": 521361.65,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 30,
+        "revenue_rate": 209073.37,
+        "floor_share": 10,
+        "cap_share": 30,
+        "style_slots": 132,
+        "expected_rev_index": 6272201.0,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 48803.57,
+        "floor_share": 2,
+        "cap_share": 7,
+        "style_slots": 8,
+        "expected_rev_index": 97607.13,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 93546.73,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 22,
+        "expected_rev_index": 467733.66,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 22,
+        "expected_rev_index": 511144.96,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 6,
+        "revenue_rate": 106872.13,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 26,
+        "expected_rev_index": 641232.79,
+        "signal": "HOLD"
+      }
+    ],
+    "total_expected_revenue_index": 15259415.73,
+    "style_slots_used": 437,
+    "display_capacity": 440,
+    "message": "OK"
+  },
+  {
+    "store_id": 2048,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 21,
+        "revenue_rate": 152756.19,
+        "floor_share": 7,
+        "cap_share": 21,
+        "style_slots": 84,
+        "expected_rev_index": 3207879.99,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 73449.57,
+        "floor_share": 3,
+        "cap_share": 10,
+        "style_slots": 12,
+        "expected_rev_index": 220348.71,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 20,
+        "revenue_rate": 147319.05,
+        "floor_share": 7,
+        "cap_share": 20,
+        "style_slots": 80,
+        "expected_rev_index": 2946381.03,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 33064.53,
+        "floor_share": 2,
+        "cap_share": 5,
+        "style_slots": 8,
+        "expected_rev_index": 66129.07,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 104272.33,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 20,
+        "expected_rev_index": 521361.65,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 29,
+        "revenue_rate": 209073.37,
+        "floor_share": 10,
+        "cap_share": 29,
+        "style_slots": 115,
+        "expected_rev_index": 6063127.63,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 48803.57,
+        "floor_share": 2,
+        "cap_share": 7,
+        "style_slots": 8,
+        "expected_rev_index": 97607.13,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 93546.73,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 16,
+        "expected_rev_index": 374186.93,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 27739.58,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 4,
+        "expected_rev_index": 27739.58,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 20,
+        "expected_rev_index": 511144.96,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 8,
+        "revenue_rate": 106872.13,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 32,
+        "expected_rev_index": 854977.05,
+        "signal": "HOLD"
+      }
+    ],
+    "total_expected_revenue_index": 14890883.73,
+    "style_slots_used": 399,
+    "display_capacity": 400,
+    "message": "OK"
+  },
+  {
+    "store_id": 8211,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 38700.89,
+        "floor_share": 2,
+        "cap_share": 6,
+        "style_slots": 9,
+        "expected_rev_index": 77401.78,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 23,
+        "revenue_rate": 152756.19,
+        "floor_share": 8,
+        "cap_share": 23,
+        "style_slots": 106,
+        "expected_rev_index": 3513392.37,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 73449.57,
+        "floor_share": 4,
+        "cap_share": 11,
+        "style_slots": 18,
+        "expected_rev_index": 293798.27,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 22,
+        "revenue_rate": 147319.05,
+        "floor_share": 7,
+        "cap_share": 22,
+        "style_slots": 102,
+        "expected_rev_index": 3241019.14,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 104272.33,
+        "floor_share": 5,
+        "cap_share": 16,
+        "style_slots": 23,
+        "expected_rev_index": 521361.65,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 31,
+        "revenue_rate": 209073.37,
+        "floor_share": 10,
+        "cap_share": 31,
+        "style_slots": 143,
+        "expected_rev_index": 6481274.36,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 48803.57,
+        "floor_share": 2,
+        "cap_share": 7,
+        "style_slots": 9,
+        "expected_rev_index": 97607.13,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 93546.73,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 23,
+        "expected_rev_index": 467733.66,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 27739.58,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 4,
+        "expected_rev_index": 27739.58,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 23,
+        "expected_rev_index": 511144.96,
+        "signal": "REDUCE"
+      }
+    ],
+    "total_expected_revenue_index": 15232472.91,
+    "style_slots_used": 460,
+    "display_capacity": 464,
+    "message": "OK"
+  },
+  {
+    "store_id": 8219,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 21,
+        "revenue_rate": 152756.19,
+        "floor_share": 7,
+        "cap_share": 21,
+        "style_slots": 72,
+        "expected_rev_index": 3207879.99,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 73449.57,
+        "floor_share": 3,
+        "cap_share": 10,
+        "style_slots": 10,
+        "expected_rev_index": 220348.71,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 21,
+        "revenue_rate": 147319.05,
+        "floor_share": 7,
+        "cap_share": 21,
+        "style_slots": 72,
+        "expected_rev_index": 3093700.09,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 104272.33,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 17,
+        "expected_rev_index": 521361.65,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 29,
+        "revenue_rate": 209073.37,
+        "floor_share": 10,
+        "cap_share": 29,
+        "style_slots": 100,
+        "expected_rev_index": 6063127.63,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 48803.57,
+        "floor_share": 2,
+        "cap_share": 7,
+        "style_slots": 6,
+        "expected_rev_index": 97607.13,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 93546.73,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 13,
+        "expected_rev_index": 374186.93,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 27739.58,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 3,
+        "expected_rev_index": 27739.58,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 17,
+        "expected_rev_index": 511144.96,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 9,
+        "revenue_rate": 106872.13,
+        "floor_share": 5,
+        "cap_share": 15,
+        "style_slots": 31,
+        "expected_rev_index": 961849.18,
+        "signal": "HOLD"
+      }
+    ],
+    "total_expected_revenue_index": 15078945.85,
+    "style_slots_used": 341,
+    "display_capacity": 345,
+    "message": "OK"
+  },
+  {
+    "store_id": 8242,
+    "status": "OPTIMAL",
+    "buckets": [
+      {
+        "bucket_key": "CASUAL SHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 38700.89,
+        "floor_share": 2,
+        "cap_share": 5,
+        "style_slots": 9,
+        "expected_rev_index": 77401.78,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CASUAL SHIRTS | Mid",
+        "display_share_pct": 21,
+        "revenue_rate": 152756.19,
+        "floor_share": 7,
+        "cap_share": 21,
+        "style_slots": 95,
+        "expected_rev_index": 3207879.99,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "CHINOS | Mid",
+        "display_share_pct": 3,
+        "revenue_rate": 73449.57,
+        "floor_share": 3,
+        "cap_share": 10,
+        "style_slots": 13,
+        "expected_rev_index": 220348.71,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "CHINOS | Premium",
+        "display_share_pct": 20,
+        "revenue_rate": 147319.05,
+        "floor_share": 7,
+        "cap_share": 20,
+        "style_slots": 91,
+        "expected_rev_index": 2946381.03,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Economy",
+        "display_share_pct": 1,
+        "revenue_rate": 33064.53,
+        "floor_share": 1,
+        "cap_share": 4,
+        "style_slots": 4,
+        "expected_rev_index": 33064.53,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 104272.33,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 22,
+        "expected_rev_index": 521361.65,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "FORMAL SHIRTS | Premium",
+        "display_share_pct": 28,
+        "revenue_rate": 209073.37,
+        "floor_share": 9,
+        "cap_share": 28,
+        "style_slots": 127,
+        "expected_rev_index": 5854054.26,
+        "signal": "INCREASE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Economy",
+        "display_share_pct": 2,
+        "revenue_rate": 48803.57,
+        "floor_share": 2,
+        "cap_share": 7,
+        "style_slots": 9,
+        "expected_rev_index": 97607.13,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "POLO TSHIRTS | Mid",
+        "display_share_pct": 4,
+        "revenue_rate": 93546.73,
+        "floor_share": 4,
+        "cap_share": 13,
+        "style_slots": 18,
+        "expected_rev_index": 374186.93,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Mid",
+        "display_share_pct": 5,
+        "revenue_rate": 102228.99,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 22,
+        "expected_rev_index": 511144.96,
+        "signal": "REDUCE"
+      },
+      {
+        "bucket_key": "TROUSERS | Premium",
+        "display_share_pct": 9,
+        "revenue_rate": 106872.13,
+        "floor_share": 5,
+        "cap_share": 14,
+        "style_slots": 41,
+        "expected_rev_index": 961849.18,
+        "signal": "HOLD"
+      }
+    ],
+    "total_expected_revenue_index": 14805280.15,
+    "style_slots_used": 451,
+    "display_capacity": 457,
+    "message": "OK"
+  }
+]

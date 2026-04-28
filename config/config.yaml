@@ -1,0 +1,60 @@
+# Arvind Fashions Store Optimisation — Configuration
+# Review and update quarterly with Merchandising team
+
+brand: Arrow   # Phase 1 covers Arrow only
+
+# Priceband thresholds (₹ MRP) — review quarterly as Arrow price range evolves
+pricebands:
+  Economy:
+    min: 0
+    max: 1999
+  Mid:
+    min: 2000
+    max: 2999
+  Premium:
+    min: 3000
+    max: 999999
+
+# IP solver parameters
+solver:
+  min_share_pct: 1       # C4 — absolute floor per bucket (%)
+  max_share_pct: 45      # C3 — cap per bucket (%)
+  total_share_pct: 100   # C1 — must sum to exactly this
+  timeout_seconds: 60
+  # floor_weight: proportion of each bucket's revenue-rate-proportional fair
+  # share that is guaranteed as a minimum floor.
+  #   0.0 = uniform 1% floor (bang-bang, old behaviour)
+  #   0.5 = each bucket gets ≥50% of its proportional fair share (recommended)
+  #   1.0 = fully proportional, no free optimisation budget
+  floor_weight: 0.50
+  # cap_multiplier: each bucket can receive at most (proportional_share × cap_multiplier).
+  # Together floor_weight and cap_multiplier define the allocation band per bucket:
+  #   floor = proportional × 0.50  (guaranteed minimum)
+  #   cap   = proportional × 1.50  (maximum allowed)
+  # The solver fills within this band, forcing free budget to spread across
+  # multiple buckets rather than pile into the top 1-2.
+  cap_multiplier: 1.50
+
+# Revenue rate computation
+revenue_rate:
+  window_weeks: 4               # rolling window for rate calculation
+  min_weeks_threshold: 2        # seed from category avg if fewer weeks of data
+
+# Size break monitoring
+size_break:
+  core_fashion_value: CORE      # FASHION field value for pivotable sizes
+  soh_threshold: 2              # units at or below which risk is flagged
+  quality_filter: Q1            # exclude seconds / defects
+
+# Solver health thresholds (active bucket count per store)
+bucket_health:
+  good_max: 19
+  manageable_max: 49
+  warning_max: 99
+  # >= 100 = CRITICAL
+
+# Streamlit app
+app:
+  title: "Store Revenue Optimisation"
+  brand: "Arvind Fashions Limited"
+  phase: "Phase 1 — Integer Programming"
