@@ -26,6 +26,176 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ── Global CSS theme ─────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+
+/* ── Base ── */
+html, body, [class*="css"] {
+    font-family: 'Inter', sans-serif;
+}
+.stApp {
+    background: #0f172a;
+    color: #e2e8f0;
+}
+
+/* ── Sidebar ── */
+[data-testid="stSidebar"] {
+    background: #1e293b !important;
+    border-right: 1px solid #334155;
+}
+[data-testid="stSidebar"] * {
+    color: #e2e8f0 !important;
+}
+[data-testid="stSidebar"] .stRadio label {
+    color: #cbd5e1 !important;
+    font-size: 0.9rem;
+}
+[data-testid="stSidebar"] hr {
+    border-color: #334155;
+}
+
+/* ── Page title / headers ── */
+h1 {
+    color: #f8fafc !important;
+    font-weight: 700 !important;
+    letter-spacing: -0.5px;
+    border-left: 4px solid #f59e0b;
+    padding-left: 0.75rem;
+}
+h2, h3, h4 {
+    color: #e2e8f0 !important;
+    font-weight: 600 !important;
+}
+h4 {
+    border-bottom: 1px solid #334155;
+    padding-bottom: 0.35rem;
+    margin-top: 1.5rem !important;
+}
+
+/* ── Metric cards ── */
+[data-testid="stMetric"] {
+    background: #1e293b;
+    border-radius: 10px;
+    padding: 1rem 1.2rem;
+    border: 1px solid #334155;
+    border-top: 3px solid #f59e0b;
+}
+[data-testid="stMetricLabel"] {
+    color: #94a3b8 !important;
+    font-size: 0.78rem !important;
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+}
+[data-testid="stMetricValue"] {
+    color: #f8fafc !important;
+    font-size: 1.6rem !important;
+    font-weight: 700 !important;
+}
+[data-testid="stMetricDelta"] {
+    color: #34d399 !important;
+}
+
+/* ── Dataframe / table ── */
+[data-testid="stDataFrame"] {
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid #334155;
+}
+.stDataFrame iframe {
+    border-radius: 10px;
+}
+
+/* ── Select / input widgets ── */
+[data-testid="stSelectbox"] > div > div,
+[data-testid="stTextArea"] textarea,
+[data-testid="stSlider"] {
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+    border-color: #334155 !important;
+}
+[data-testid="stSelectbox"] label,
+[data-testid="stTextArea"] label,
+[data-testid="stSlider"] label {
+    color: #94a3b8 !important;
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+}
+
+/* ── Buttons ── */
+.stButton > button {
+    background: #f59e0b !important;
+    color: #0f172a !important;
+    font-weight: 700 !important;
+    border: none !important;
+    border-radius: 8px !important;
+    padding: 0.5rem 1.4rem !important;
+    font-size: 0.9rem !important;
+    transition: background 0.2s;
+}
+.stButton > button:hover {
+    background: #d97706 !important;
+}
+
+/* ── Download button ── */
+.stDownloadButton > button {
+    background: #1e293b !important;
+    color: #f59e0b !important;
+    font-weight: 600 !important;
+    border: 1px solid #f59e0b !important;
+    border-radius: 8px !important;
+}
+.stDownloadButton > button:hover {
+    background: #f59e0b !important;
+    color: #0f172a !important;
+}
+
+/* ── Alert boxes ── */
+[data-testid="stAlert"] {
+    border-radius: 10px;
+    border-left-width: 4px;
+}
+div[data-baseweb="notification"] {
+    background: #1e293b !important;
+    color: #e2e8f0 !important;
+}
+
+/* ── Expander ── */
+[data-testid="stExpander"] {
+    background: #1e293b !important;
+    border: 1px solid #334155 !important;
+    border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary {
+    color: #e2e8f0 !important;
+    font-weight: 600;
+}
+
+/* ── General text ── */
+p, li, span, div {
+    color: #e2e8f0;
+}
+code {
+    background: #1e293b !important;
+    color: #93c5fd !important;
+    border-radius: 4px;
+    padding: 2px 6px;
+}
+hr {
+    border-color: #334155 !important;
+}
+
+/* ── Horizontal rule between sections ── */
+.section-divider {
+    border: none;
+    border-top: 1px solid #334155;
+    margin: 1.5rem 0;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ── Load processed outputs ───────────────────────────────────────────────────
 DATA_DIR = Path(__file__).parents[2] / "data"
 
@@ -58,13 +228,19 @@ def load_revenue_rates():
 
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
-st.sidebar.markdown(
-    "<div style='padding:0.5rem 0 0.25rem;font-size:1.1rem;font-weight:700;letter-spacing:1px;'>🏹 ARROW BRAND</div>"
-    "<div style='font-size:0.75rem;color:#888;'>Arvind Fashions Limited</div>",
-    unsafe_allow_html=True,
-)
-st.sidebar.title("Store Optimisation")
-st.sidebar.markdown("---")
+st.sidebar.markdown("""
+<div style="padding:1rem 0 0.8rem;border-bottom:1px solid #334155;margin-bottom:0.5rem;">
+  <div style="font-size:1.25rem;font-weight:800;color:#f59e0b;letter-spacing:2px;">
+    ARROW
+  </div>
+  <div style="font-size:0.7rem;color:#64748b;letter-spacing:1px;text-transform:uppercase;">
+    Arvind Fashions Limited
+  </div>
+  <div style="font-size:0.78rem;color:#94a3b8;margin-top:0.4rem;font-weight:600;">
+    Store Revenue Optimisation
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 page = st.sidebar.radio(
     "Navigate",
@@ -100,8 +276,17 @@ st.sidebar.markdown(
 # SCREEN 1 — STORE SELECTOR
 # ────────────────────────────────────────────────────────────────────────────
 if page == "🏪 Store Selector":
-    st.title("Store Selector")
-    st.markdown("Filter stores and select one to view its recommended display allocation.")
+    st.markdown("""
+<div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:14px;
+            padding:1.5rem 2rem;margin-bottom:1.5rem;border-left:5px solid #f59e0b;">
+  <div style="font-size:1.6rem;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">
+    Store Selector
+  </div>
+  <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
+    Filter by region, choose a store, and navigate to the Allocation Table for IP recommendations.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -135,6 +320,11 @@ if page == "🏪 Store Selector":
         lambda n: "🟢 GOOD" if n < 20 else ("🟡 MANAGEABLE" if n < 50 else "🔴 WARNING")
     )
 
+    st.markdown(
+        '<div style="font-size:0.75rem;color:#64748b;text-transform:uppercase;'
+        'letter-spacing:0.8px;margin:1rem 0 0.4rem;">Arrow Stores Overview</div>',
+        unsafe_allow_html=True,
+    )
     st.dataframe(
         summary[["store_id", "STORE_NAME", "REGION", "MIN_OPTION_COUNT", "buckets", "top_bucket", "Health"]].rename(columns={
             "store_id": "Store Code", "STORE_NAME": "Store", "REGION": "Region",
@@ -171,17 +361,36 @@ so all stores should be 🟢 GOOD.
         store_id = recs_df[recs_df["STORE_NAME"] == selected_store_name]["store_id"].values[0]
         st.session_state["selected_store_id"]   = int(store_id)
         st.session_state["selected_store_name"] = selected_store_name
-        st.success(
-            f"Store selected: **{selected_store_name}**  \n"
-            f"→ Use the **left sidebar** to navigate to **📊 Allocation Table** to see recommendations."
-        )
+        st.markdown(f"""
+<div style="background:#1e293b;border-radius:10px;padding:1rem 1.4rem;
+            border:1px solid #334155;border-left:4px solid #34d399;margin-top:1rem;">
+  <div style="font-size:0.75rem;color:#34d399;font-weight:700;letter-spacing:0.6px;
+              text-transform:uppercase;">Store Selected</div>
+  <div style="font-size:1rem;font-weight:700;color:#f8fafc;margin:0.3rem 0 0.15rem;">
+    {selected_store_name}
+  </div>
+  <div style="font-size:0.82rem;color:#94a3b8;">
+    Navigate to <b style="color:#f59e0b;">Allocation Table</b> in the sidebar to view IP recommendations.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
 
 # ────────────────────────────────────────────────────────────────────────────
 # SCREEN 2 — ALLOCATION TABLE
 # ────────────────────────────────────────────────────────────────────────────
 elif page == "📊 Allocation Table":
-    st.title("Allocation Table")
+    st.markdown("""
+<div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:14px;
+            padding:1.5rem 2rem;margin-bottom:1.5rem;border-left:5px solid #f59e0b;">
+  <div style="font-size:1.6rem;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">
+    Allocation Table
+  </div>
+  <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
+    IP-optimised display share per bucket — floor guaranteed + solver-allocated extra.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     if "selected_store_id" not in st.session_state:
         st.info("Select a store from the Store Selector first.")
@@ -189,7 +398,14 @@ elif page == "📊 Allocation Table":
 
     store_id   = st.session_state["selected_store_id"]
     store_name = st.session_state["selected_store_name"]
-    st.subheader(f"{store_name} — Store {store_id}")
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:0.7rem;margin-bottom:1rem;">'
+        f'<span style="background:#f59e0b;color:#0f172a;font-weight:700;font-size:0.8rem;'
+        f'padding:3px 10px;border-radius:20px;letter-spacing:0.5px;">STORE {store_id}</span>'
+        f'<span style="color:#f8fafc;font-size:1.1rem;font-weight:600;">{store_name}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     store_recs = recs_df[recs_df["store_id"] == store_id].copy()
     cap        = capacity_df[capacity_df["STORE_CODE"] == store_id]["MIN_OPTION_COUNT"].values[0]
@@ -393,8 +609,17 @@ the solver's free budget was fully consumed by higher-rate buckets.
 # SCREEN 3 — WHAT-IF SIMULATION
 # ────────────────────────────────────────────────────────────────────────────
 elif page == "🔧 What-If Simulation":
-    st.title("What-If Simulation")
-    st.markdown("Pin a bucket to a fixed share — the solver re-optimises the remaining buckets automatically.")
+    st.markdown("""
+<div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:14px;
+            padding:1.5rem 2rem;margin-bottom:1.5rem;border-left:5px solid #f59e0b;">
+  <div style="font-size:1.6rem;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">
+    What-If Simulation
+  </div>
+  <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
+    Pin a bucket to a fixed share — the solver re-optimises remaining buckets automatically.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     if "selected_store_id" not in st.session_state:
         st.info("Select a store from the Store Selector first.")
@@ -402,7 +627,14 @@ elif page == "🔧 What-If Simulation":
 
     store_id   = st.session_state["selected_store_id"]
     store_name = st.session_state["selected_store_name"]
-    st.subheader(f"{store_name}")
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:0.7rem;margin-bottom:1rem;">'
+        f'<span style="background:#f59e0b;color:#0f172a;font-weight:700;font-size:0.8rem;'
+        f'padding:3px 10px;border-radius:20px;letter-spacing:0.5px;">STORE {store_id}</span>'
+        f'<span style="color:#f8fafc;font-size:1.1rem;font-weight:600;">{store_name}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     store_recs = recs_df[recs_df["store_id"] == store_id].copy()
     cap        = capacity_df[capacity_df["STORE_CODE"] == store_id]["MIN_OPTION_COUNT"].values[0]
@@ -446,8 +678,17 @@ elif page == "🔧 What-If Simulation":
 # SCREEN 4 — EXPORT & ACTIVATE
 # ────────────────────────────────────────────────────────────────────────────
 elif page == "📤 Export & Activate":
-    st.title("Export & Activate")
-    st.markdown("Download Monday rearrangement plan for store team and area manager.")
+    st.markdown("""
+<div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:14px;
+            padding:1.5rem 2rem;margin-bottom:1.5rem;border-left:5px solid #f59e0b;">
+  <div style="font-size:1.6rem;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">
+    Export & Activate
+  </div>
+  <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
+    Download the Monday rearrangement plan for the store team and area manager.
+  </div>
+</div>
+""", unsafe_allow_html=True)
 
     if "selected_store_id" not in st.session_state:
         st.info("Select a store from the Store Selector first.")
@@ -455,7 +696,14 @@ elif page == "📤 Export & Activate":
 
     store_id   = st.session_state["selected_store_id"]
     store_name = st.session_state["selected_store_name"]
-    st.subheader(f"{store_name}")
+    st.markdown(
+        f'<div style="display:inline-flex;align-items:center;gap:0.7rem;margin-bottom:1rem;">'
+        f'<span style="background:#f59e0b;color:#0f172a;font-weight:700;font-size:0.8rem;'
+        f'padding:3px 10px;border-radius:20px;letter-spacing:0.5px;">STORE {store_id}</span>'
+        f'<span style="color:#f8fafc;font-size:1.1rem;font-weight:600;">{store_name}</span>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
     store_recs = recs_df[recs_df["store_id"] == store_id].copy()
     cap        = capacity_df[capacity_df["STORE_CODE"] == store_id]["MIN_OPTION_COUNT"].values[0]
@@ -478,6 +726,24 @@ elif page == "📤 Export & Activate":
         st.info("Daily SOH monitoring job flags CORE styles with SOH ≤ 2 units for next-day warehouse replenishment. Check `src/utils/size_break_monitor.py` for the daily job.")
 
     st.markdown("---")
-    st.markdown(f"**Activation date:** Next Monday")
-    st.markdown(f"**Style slots assigned:** {store_recs['Style Slots'].sum()} / {cap}")
-    st.markdown(f"**Total display share:** {store_recs['display_share_pct'].sum()}%")
+    slots_used  = store_recs['Style Slots'].sum()
+    total_share = store_recs['display_share_pct'].sum()
+    st.markdown(f"""
+<div style="display:flex;gap:1.2rem;flex-wrap:wrap;margin-top:0.5rem;">
+  <div style="background:#1e293b;border-radius:10px;padding:0.9rem 1.4rem;
+              border:1px solid #334155;border-top:3px solid #f59e0b;min-width:160px;">
+    <div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;">Activation Date</div>
+    <div style="font-size:1.1rem;font-weight:700;color:#f8fafc;margin-top:0.3rem;">Next Monday</div>
+  </div>
+  <div style="background:#1e293b;border-radius:10px;padding:0.9rem 1.4rem;
+              border:1px solid #334155;border-top:3px solid #34d399;min-width:160px;">
+    <div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;">Style Slots</div>
+    <div style="font-size:1.1rem;font-weight:700;color:#f8fafc;margin-top:0.3rem;">{slots_used} / {cap}</div>
+  </div>
+  <div style="background:#1e293b;border-radius:10px;padding:0.9rem 1.4rem;
+              border:1px solid #334155;border-top:3px solid #818cf8;min-width:160px;">
+    <div style="font-size:0.7rem;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;">Total Display Share</div>
+    <div style="font-size:1.1rem;font-weight:700;color:#f8fafc;margin-top:0.3rem;">{total_share}%</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
