@@ -16,6 +16,7 @@ Usage:
     conn.close()
 """
 
+import json
 import struct
 import pandas as pd
 import pyodbc
@@ -24,8 +25,11 @@ WAREHOUSE_SERVER   = "t5fulvvcjsjehnrpedrb4vbtli-crzekx4zfiqutls4y4njjiwi3y.data
 WAREHOUSE_DATABASE = "Arvind_Analytics_Warehouse"
 
 
-# ── EDA SQL query — mirrors the agreed EDA dataset definition ─────────────────
-_EDA_SQL = """
+# ── EDA SQL template ─────────────────────────────────────────────────────────
+# <<PRICEBAND_CASE>> is replaced at runtime with a per-category CASE WHEN
+# expression built from priceband_config.json.
+# When no config exists, _build_eda_sql() injects the uniform fallback.
+_EDA_SQL_TEMPLATE = """
 -- ============================================================
 -- ARROW STORE REVENUE OPTIMISATION — EDA DATASET
 -- Scope : 130 active Arrow stores with sales (last 4 weeks)
@@ -59,11 +63,7 @@ sales_style AS (
         f.SAP_STORECODE                                 AS store_id,
         f.STYLECODE                                     AS style_code,
         UPPER(LTRIM(RTRIM(f.CATEGORY)))                AS category,
-        CASE
-            WHEN f.UNITMRP < 2000                THEN 'Economy'
-            WHEN f.UNITMRP BETWEEN 2000 AND 2999 THEN 'Mid'
-            ELSE                                      'Premium'
-        END                                            AS priceband,
+        <<PRICEBAND_CASE>>                             AS priceband,
         SUM(f.NETAMT)                                  AS style_revenue_4w,
         SUM(f.QUANTITY)                                AS style_units_sold,
         SUM(f.TOTAL_MRP)                               AS style_total_mrp,
@@ -86,11 +86,7 @@ sales_style AS (
         f.SAP_STORECODE,
         f.STYLECODE,
         UPPER(LTRIM(RTRIM(f.CATEGORY))),
-        CASE
-            WHEN f.UNITMRP < 2000                THEN 'Economy'
-            WHEN f.UNITMRP BETWEEN 2000 AND 2999 THEN 'Mid'
-            ELSE                                      'Premium'
-        END
+        <<PRICEBAND_CASE>>
 ),
 
 -- ── 3. SOH — inventory per store × style ─────────────────────────────
@@ -308,6 +304,120 @@ ORDER BY
 """
 
 
+# ── MRP percentile discovery SQL ─────────────────────────────────────────────
+# Fetches MRP distribution per category to derive data-driven priceband breaks.
+_MRP_DIST_SQL = """
+WITH date_bounds AS (
+    SELECT
+        CONVERT(DATE, DATEADD(WEEK, -4, GETDATE())) AS window_start,
+        CONVERT(DATE, GETDATE())                     AS window_end
+),
+active_arrow_stores AS (
+    SELECT STORE_CODE
+    FROM [Arvind_Analytics_Warehouse].[prd].[DIM_SAP_STORE_MASTER]
+    WHERE ARROW != 0 AND STATUS = 'ACTIVE'
+)
+SELECT
+    UPPER(LTRIM(RTRIM(f.CATEGORY)))                            AS category,
+    COUNT(DISTINCT f.STYLECODE)                                AS style_count,
+    COUNT(*)                                                   AS transaction_rows,
+    MIN(f.UNITMRP)                                             AS min_mrp,
+    MAX(f.UNITMRP)                                             AS max_mrp,
+    PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p10,
+    PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p25,
+    PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p33,
+    PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p50,
+    PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p67,
+    PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p75,
+    PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY f.UNITMRP)   AS p90
+FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_SALES_TC_ONLINE_BASE] f
+INNER JOIN active_arrow_stores st ON f.SAP_STORECODE = st.STORE_CODE
+CROSS JOIN date_bounds d
+WHERE f.BRAND       = 'ARROW'
+  AND f.INVOICETYPE = 'SALES'
+  AND f.QUALITY     = 'Q1'
+  AND f.QUANTITY    > 0
+  AND UPPER(LTRIM(RTRIM(f.CATEGORY))) NOT IN (
+        'PROMO', 'SAMPLES', 'SCRAP', 'TRIMS', 'CARRY BAG'
+  )
+  AND CONVERT(DATE, f.INVOICE_DATE) >= d.window_start
+  AND CONVERT(DATE, f.INVOICE_DATE) <  d.window_end
+GROUP BY UPPER(LTRIM(RTRIM(f.CATEGORY)))
+ORDER BY style_count DESC;
+"""
+
+
+def compute_priceband_breaks(mrp_dist_df: pd.DataFrame) -> dict:
+    """
+    Compute data-driven priceband break points from MRP percentile distribution.
+
+    Strategy: tertile split using p33 (Economy cap) and p67 (Mid cap).
+    Values are rounded to the nearest ₹500 for clean, readable thresholds.
+
+    Returns
+    -------
+    dict  {category: {"economy_cap": int, "mid_cap": int}, "_default": {...}}
+    """
+    breaks = {}
+    for _, row in mrp_dist_df.iterrows():
+        cat = row["category"]
+        economy_cap = int(round(float(row["p33"]) / 500) * 500)
+        mid_cap     = int(round(float(row["p67"]) / 500) * 500)
+
+        # Ensure minimum ₹500 separation between bands
+        economy_cap = max(economy_cap, 500)
+        if mid_cap <= economy_cap:
+            mid_cap = economy_cap + 500
+
+        breaks[cat] = {"economy_cap": economy_cap, "mid_cap": mid_cap}
+
+    breaks["_default"] = {"economy_cap": 2000, "mid_cap": 3000}
+    return breaks
+
+
+def _build_priceband_case(category_col: str, mrp_col: str, breaks: dict) -> str:
+    """
+    Build a nested SQL CASE WHEN expression for per-category pricebands.
+
+    Example output (2 categories):
+        CASE
+            WHEN {category_col} = 'SHIRTS'   THEN
+                CASE WHEN {mrp_col} <= 1500 THEN 'Economy' WHEN {mrp_col} <= 2500 THEN 'Mid' ELSE 'Premium' END
+            WHEN {category_col} = 'TROUSERS' THEN
+                CASE WHEN {mrp_col} <= 2000 THEN 'Economy' WHEN {mrp_col} <= 3500 THEN 'Mid' ELSE 'Premium' END
+            ELSE
+                CASE WHEN {mrp_col} <= 2000 THEN 'Economy' WHEN {mrp_col} <= 3000 THEN 'Mid' ELSE 'Premium' END
+        END
+    """
+    default = breaks.get("_default", {"economy_cap": 2000, "mid_cap": 3000})
+    lines = ["CASE"]
+    for cat in sorted(k for k in breaks if k != "_default"):
+        e, m = breaks[cat]["economy_cap"], breaks[cat]["mid_cap"]
+        lines.append(
+            f"            WHEN {category_col} = '{cat}' THEN\n"
+            f"                CASE WHEN {mrp_col} <= {e} THEN 'Economy' "
+            f"WHEN {mrp_col} <= {m} THEN 'Mid' ELSE 'Premium' END"
+        )
+    e, m = default["economy_cap"], default["mid_cap"]
+    lines.append(
+        f"            ELSE\n"
+        f"                CASE WHEN {mrp_col} <= {e} THEN 'Economy' "
+        f"WHEN {mrp_col} <= {m} THEN 'Mid' ELSE 'Premium' END"
+    )
+    lines.append("        END")
+    return "\n".join(lines)
+
+
+def _build_eda_sql(breaks: dict = None) -> str:
+    """Inject the priceband CASE expression into the EDA SQL template."""
+    if not breaks:
+        breaks = {"_default": {"economy_cap": 2000, "mid_cap": 3000}}
+    case_sql = _build_priceband_case(
+        "UPPER(LTRIM(RTRIM(f.CATEGORY)))", "f.UNITMRP", breaks
+    )
+    return _EDA_SQL_TEMPLATE.replace("<<PRICEBAND_CASE>>", case_sql)
+
+
 def _get_token() -> str:
     """Obtain an AAD bearer token for the Fabric warehouse."""
     try:
@@ -335,18 +445,40 @@ def connect() -> pyodbc.Connection:
     return pyodbc.connect(conn_str, attrs_before={1256: token_struct}, autocommit=True)
 
 
-def fetch_eda_dataset() -> pd.DataFrame:
+def fetch_mrp_distribution() -> pd.DataFrame:
+    """
+    Fetch MRP percentile distribution per category from the Fabric warehouse.
+    Used to compute data-driven priceband break points via compute_priceband_breaks().
+    """
+    conn = connect()
+    try:
+        print("Fetching MRP distribution per category...")
+        df = pd.read_sql(_MRP_DIST_SQL, conn)
+        print(f"Done — {len(df):,} categories fetched.")
+        return df
+    finally:
+        conn.close()
+
+
+def fetch_eda_dataset(breaks: dict = None) -> pd.DataFrame:
     """
     Run the EDA SQL query against the Fabric warehouse and return a DataFrame.
+
+    Parameters
+    ----------
+    breaks : dict, optional
+        Per-category priceband breaks from compute_priceband_breaks().
+        When None, uses uniform fallback (Economy <2000, Mid <3000, Premium ≥3000).
 
     The result has one row per store × bucket (Category × Priceband) covering
     the last 4 weeks, with revenue metrics, SOH metrics, revenue_rate,
     sell_through_pct, signal_preview, solver_readiness, and data_quality_flag.
     """
     conn = connect()
+    sql = _build_eda_sql(breaks)
     try:
         print("Fetching EDA dataset from Fabric...")
-        df = pd.read_sql(_EDA_SQL, conn)
+        df = pd.read_sql(sql, conn)
         print(f"Done — {len(df):,} rows fetched.")
         return df
     finally:
@@ -391,13 +523,36 @@ if __name__ == "__main__":
     print(f"  Output    : {out_dir}/")
     print(f"{'='*60}\n")
 
-    df = fetch_eda_dataset()
+    today = date.today().isoformat()
 
-    out_path = out_dir / f"eda_data_{date.today().isoformat()}.csv"
+    # ── Step 1: MRP distribution → data-driven priceband breaks ──────────
+    print("Step 1/2  MRP price distribution per category...")
+    mrp_df   = fetch_mrp_distribution()
+    mrp_path = out_dir / f"mrp_distribution_{today}.csv"
+    mrp_df.to_csv(mrp_path, index=False)
+    print(f"  Saved: {mrp_path.name}")
+
+    breaks = compute_priceband_breaks(mrp_df)
+    config = {"generated_on": today, "breaks": breaks}
+    config_path = out_dir / "priceband_config.json"
+    with open(config_path, "w") as fh:
+        json.dump(config, fh, indent=2)
+    print(f"  Priceband config saved: {config_path.name}")
+    print(f"  {'Category':<22} {'Economy cap':>12}  {'Mid cap':>10}")
+    print(f"  {'-'*48}")
+    for cat, b in sorted((k, v) for k, v in breaks.items() if k != "_default"):
+        print(f"  {cat:<22} ≤ ₹{b['economy_cap']:>8,}  ≤ ₹{b['mid_cap']:>7,}")
+    print(f"  {'_default (fallback)':<22} ≤ ₹{breaks['_default']['economy_cap']:>8,}  ≤ ₹{breaks['_default']['mid_cap']:>7,}")
+
+    # ── Step 2: EDA dataset with data-driven pricebands ───────────────────
+    print(f"\nStep 2/2  EDA dataset with data-driven pricebands...")
+    df = fetch_eda_dataset(breaks)
+
+    out_path = out_dir / f"eda_data_{today}.csv"
     df.to_csv(out_path, index=False)
 
     print(f"\nRows       : {len(df):,}")
     print(f"Stores     : {df['store_id'].nunique():,}")
     print(f"Buckets    : {len(df):,}")
     print(f"Saved      : {out_path}")
-    print("\nOpen the Streamlit app and navigate to EDA Explorer to view.")
+    print("\nOpen the Streamlit app and navigate to EDA Explorer → Price Bands to review.")

@@ -14,6 +14,7 @@ Run locally:
     streamlit run src/streamlit_app/app.py
 """
 
+import json
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -256,6 +257,25 @@ _READINESS_COLORS = {
     "LIMITED":          "#f97316",
     "COARSEN REQUIRED": "#f87171",
 }
+
+
+@st.cache_data(ttl=3600)
+def load_priceband_config() -> tuple[dict, pd.DataFrame | None]:
+    """
+    Load priceband_config.json and latest mrp_distribution_*.csv from data/processed/.
+    Returns (breaks_dict, mrp_df_or_None).
+    """
+    processed = DATA_DIR / "processed"
+    config_path = processed / "priceband_config.json"
+    breaks = None
+    if config_path.exists():
+        with open(config_path) as f:
+            cfg = json.load(f)
+        breaks = cfg.get("breaks", {})
+
+    mrp_files = sorted(processed.glob("mrp_distribution_*.csv"), reverse=True)
+    mrp_df = pd.read_csv(mrp_files[0]) if mrp_files else None
+    return breaks, mrp_df
 
 
 @st.cache_data(ttl=3600)
@@ -930,12 +950,13 @@ elif page == "🔍 EDA Explorer":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📡 Fleet Overview",
         "📈 Revenue Rate",
         "🔄 Sell-Through & Discounts",
         "📦 SOH Analysis",
         "🗂️ Data Quality",
+        "💰 Price Bands",
     ])
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1473,5 +1494,165 @@ elif page == "🔍 EDA Explorer":
             st.caption(
                 f"{len(thin_data)} bucket(s) have thin data. "
                 "The solver seeds their revenue_rate from the category average across comparable stores."
+            )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 6 — PRICE BAND ANALYSIS
+    # ══════════════════════════════════════════════════════════════════════
+    with tab6:
+        pb_breaks, mrp_df = load_priceband_config()
+
+        if pb_breaks is None:
+            st.info(
+                "No priceband config found. Run `python src/data_pipeline/fabric_connector.py` "
+                "to generate data-driven breaks. Showing uniform break analysis below."
+            )
+
+        # ── Section 1: Current priceband performance ──────────────────────
+        st.markdown("#### Current Priceband Performance")
+        st.caption("Revenue and rate distribution across pricebands using the breaks applied at last data fetch.")
+
+        pb1, pb2 = st.columns(2)
+
+        # Stacked bar: revenue contribution by priceband per category
+        with pb1:
+            rev_pb = (
+                filt[filt["bucket_revenue_4w"].notna()]
+                .groupby(["category", "priceband"])["bucket_revenue_4w"]
+                .sum()
+                .reset_index()
+            )
+            if not rev_pb.empty:
+                fig_rev_pb = px.bar(
+                    rev_pb, x="category", y="bucket_revenue_4w",
+                    color="priceband",
+                    color_discrete_map=_PRICEBAND_COLORS,
+                    barmode="stack",
+                    labels={"bucket_revenue_4w": "4W Revenue (₹)", "category": "", "priceband": "Priceband"},
+                )
+                fig_rev_pb.update_layout(
+                    title=dict(text="Revenue by Category × Priceband", font=dict(size=13, color="#f8fafc")),
+                    height=350,
+                    xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                    yaxis=dict(title="4W Revenue (₹)", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                fig_rev_pb.update_layout(legend={**_LEGEND, "title": "Priceband"})
+                st.plotly_chart(fig_rev_pb, use_container_width=True)
+
+        # Revenue rate box by priceband per category
+        with pb2:
+            rate_pb = filt[filt["revenue_rate"].notna() & (filt["revenue_rate"] > 0)]
+            if not rate_pb.empty:
+                fig_rate_pb = px.box(
+                    rate_pb, x="category", y="revenue_rate",
+                    color="priceband",
+                    color_discrete_map=_PRICEBAND_COLORS,
+                    labels={"revenue_rate": "Revenue Rate (₹/unit)", "category": ""},
+                )
+                fig_rate_pb.update_layout(
+                    title=dict(text="Revenue Rate by Category × Priceband", font=dict(size=13, color="#f8fafc")),
+                    height=350,
+                    xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                    yaxis=dict(title="Revenue Rate (₹/unit)", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                fig_rate_pb.update_layout(legend={**_LEGEND, "title": "Priceband"})
+                st.plotly_chart(fig_rate_pb, use_container_width=True)
+
+        # Summary table: bucket count, revenue share, avg rate per category × priceband
+        pb_summary = (
+            filt.groupby(["category", "priceband"])
+            .agg(
+                Buckets    = ("bucket_key",        "count"),
+                Revenue_4W = ("bucket_revenue_4w", "sum"),
+                Avg_Rate   = ("revenue_rate",       "mean"),
+                Avg_SOH    = ("avg_weekly_soh",     "mean"),
+            )
+            .reset_index()
+            .sort_values(["category", "priceband"])
+        )
+        total_rev = pb_summary["Revenue_4W"].sum()
+        pb_summary["Rev_Share_%"] = (pb_summary["Revenue_4W"] / total_rev * 100).round(1)
+        pb_summary["Revenue_4W"]  = pb_summary["Revenue_4W"].map(lambda v: f"₹{v:,.0f}")
+        pb_summary["Avg_Rate"]    = pb_summary["Avg_Rate"].map(lambda v: f"₹{v:,.0f}" if v == v else "–")
+        pb_summary["Avg_SOH"]     = pb_summary["Avg_SOH"].map(lambda v: f"{v:,.0f}" if v == v else "–")
+        st.dataframe(
+            pb_summary.rename(columns={
+                "category":   "Category",
+                "priceband":  "Priceband",
+                "Buckets":    "Buckets",
+                "Revenue_4W": "4W Revenue",
+                "Rev_Share_%":"Rev Share %",
+                "Avg_Rate":   "Avg Rate (₹/unit)",
+                "Avg_SOH":    "Avg Weekly SOH",
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+        # ── Section 2: Data-driven break analysis ─────────────────────────
+        st.markdown("---")
+        st.markdown("#### Data-Driven Priceband Breaks")
+
+        if mrp_df is not None and not mrp_df.empty:
+            st.caption(
+                "MRP percentile distribution per category from the last 4 weeks of Arrow sales. "
+                "Recommended breaks use p33 (Economy cap) and p67 (Mid cap) — tertile split, rounded to ₹500."
+            )
+
+            # MRP distribution chart: box-style using p10/p25/p50/p75/p90
+            fig_mrp = go.Figure()
+            pb_cols   = ["p10", "p25", "p33", "p50", "p67", "p75", "p90"]
+            available = [c for c in pb_cols if c in mrp_df.columns]
+            for _, row in mrp_df.iterrows():
+                if not all(c in row for c in ["p25", "p50", "p75"]):
+                    continue
+                fig_mrp.add_trace(go.Box(
+                    name=row["category"],
+                    q1=[row["p25"]], median=[row["p50"]], q3=[row["p75"]],
+                    lowerfence=[row.get("p10", row["p25"])],
+                    upperfence=[row.get("p90", row["p75"])],
+                    boxpoints=False,
+                ))
+            fig_mrp.update_layout(
+                title=dict(text="MRP Distribution per Category (p10–p90)", font=dict(size=13, color="#f8fafc")),
+                height=380,
+                xaxis=dict(title="Category", gridcolor="#334155"),
+                yaxis=dict(title="MRP (₹)", gridcolor="#334155"),
+                showlegend=False,
+                **_CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_mrp, use_container_width=True)
+
+            # Recommended vs current breaks comparison table
+            from src.data_pipeline.fabric_connector import compute_priceband_breaks
+            rec_breaks = compute_priceband_breaks(mrp_df)
+
+            _CURRENT_DEFAULT = {"economy_cap": 2000, "mid_cap": 3000}
+            rows_comp = []
+            for _, row in mrp_df.sort_values("style_count", ascending=False).iterrows():
+                cat = row["category"]
+                rec = rec_breaks.get(cat, rec_breaks["_default"])
+                cur = (pb_breaks or {}).get(cat, _CURRENT_DEFAULT)
+                rows_comp.append({
+                    "Category":         cat,
+                    "Styles (4W)":      int(row["style_count"]),
+                    "MRP p50 (median)": f"₹{int(row['p50']):,}",
+                    "Current Economy ≤":f"₹{cur['economy_cap']:,}",
+                    "Current Mid ≤":    f"₹{cur['mid_cap']:,}",
+                    "Rec Economy ≤":    f"₹{rec['economy_cap']:,}",
+                    "Rec Mid ≤":        f"₹{rec['mid_cap']:,}",
+                    "Changed?":         "✅" if cur != rec else "–",
+                })
+            st.dataframe(pd.DataFrame(rows_comp), use_container_width=True, hide_index=True)
+
+            st.info(
+                "To apply recommended breaks: re-run `python src/data_pipeline/fabric_connector.py` "
+                "— it will save the new config and re-fetch EDA data with per-category pricebands."
+            )
+        else:
+            st.warning(
+                "MRP distribution file not found. "
+                "Run `python src/data_pipeline/fabric_connector.py` to generate it."
             )
 
