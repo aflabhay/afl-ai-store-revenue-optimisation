@@ -310,7 +310,7 @@ def load_eda_data():
             "No EDA data file found. Run: python src/data_pipeline/fabric_connector.py"
         )
         st.stop()
-    return pd.read_csv(files[0]), files[0].name, "fabric"
+    return pd.read_csv(files[0], low_memory=False), files[0].name, "fabric"
 
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
@@ -359,32 +359,23 @@ st.sidebar.markdown(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("**How the algorithm works**")
 st.sidebar.markdown("""
-Every Sunday night the solver reads the last **4 weeks of sales & SOH** data
-and runs an **Integer Programming (IP)** model for each store.
-
-**Step 1 — Revenue Rate**
-Each bucket (Category × Price tier) gets a score:
-`Revenue Rate = 4-week revenue ÷ avg weekly SOH`
-Higher rate = more revenue generated per unit of stock held.
-
-**Step 2 — Proportional Floor**
-Every bucket is guaranteed a *minimum* share of floor space, proportional
-to its revenue rate. No bucket is starved of space.
-
-**Step 3 — IP Solver (PuLP / HiGHS)**
-The remaining "free budget" is allocated by maximising total expected revenue
-subject to:
-- Each bucket stays within a min floor and a 45% cap
-- All shares sum to exactly 100%
-
-**Output**
-A recommended `display_share_%` per bucket — translated into style slot counts
-based on the store's display capacity.
-
-*The planner can override any bucket via What-If Simulation before exporting.*
-""")
+<div style="font-size:0.72rem;color:#94a3b8;line-height:1.55;">
+<b style="color:#cbd5e1;font-size:0.74rem;">How the algorithm works</b><br><br>
+Runs every Sunday on 4 weeks of Fabric data.<br><br>
+<b style="color:#cbd5e1;">① Revenue Rate</b><br>
+<code style="font-size:0.68rem;">rate = 4w revenue ÷ avg weekly SOH</code><br>
+Higher = more revenue per unit held.<br><br>
+<b style="color:#cbd5e1;">② Proportional Floor & Cap</b><br>
+Each bucket gets a floor <i>(min share)</i> and cap <i>(max share)</i> based on its rate relative to all buckets. Prevents one bucket dominating.<br><br>
+<b style="color:#cbd5e1;">③ SOH Cap (C7)</b><br>
+Share is capped so style slots never exceed available SOH styles in that bucket.<br><br>
+<b style="color:#cbd5e1;">④ IP Solver (PuLP / HiGHS)</b><br>
+Allocates remaining free budget to maximise revenue. Shares sum to 100%.<br><br>
+<b style="color:#cbd5e1;">Signals</b><br>
+🔼 INCREASE — hit cap · ➡ HOLD · 🔽 REDUCE — at floor
+</div>
+""", unsafe_allow_html=True)
 
 
 
@@ -561,17 +552,28 @@ elif page == "📊 Allocation Table":
     store_recs["signal_icon"] = store_recs["signal"].map(
         {"INCREASE": "🟢", "HOLD": "🟡", "REDUCE": "🔴"}
     ).fillna("⚪")
-    store_recs["Style Slots"] = (store_recs["display_share_pct"] / 100 * cap).round().astype(int)
+    # hanger_slots and style_slots come directly from solver output (size-aware).
+    # If not present (old recommendations file), fall back to simple calculation.
+    if "hanger_slots" not in store_recs.columns:
+        store_recs["hanger_slots"] = (store_recs["display_share_pct"] / 100 * cap).round().astype(int)
+    if "style_slots" not in store_recs.columns:
+        store_recs["style_slots"] = store_recs["hanger_slots"]
 
     # Merge current SOH from EDA data so planners can see Available Styles vs Recommended Slots
     try:
         _eda_alloc, _, _ = load_eda_data()
-        _store_eda = _eda_alloc[_eda_alloc["store_id"] == store_id][
-            ["bucket_key", "avg_weekly_soh", "style_count_in_bucket"]
-        ].copy()
-        store_recs = store_recs.merge(_store_eda, on="bucket_key", how="left")
+        _eda_cols = ["bucket_key", "avg_weekly_soh", "style_count_in_bucket"]
+        if "avg_sizes_per_style" in _eda_alloc.columns:
+            _eda_cols.append("avg_sizes_per_style")
+        _store_eda = _eda_alloc[_eda_alloc["store_id"] == store_id][_eda_cols].copy()
+        store_recs = store_recs.merge(_store_eda, on="bucket_key", how="left", suffixes=("", "_eda"))
         store_recs["avg_weekly_soh"] = store_recs["avg_weekly_soh"].fillna(0)
         store_recs["style_count_in_bucket"] = store_recs["style_count_in_bucket"].fillna(0).astype(int)
+        if "avg_sizes_per_style_eda" in store_recs.columns:
+            store_recs["avg_sizes_per_style"] = store_recs["avg_sizes_per_style"].fillna(
+                store_recs["avg_sizes_per_style_eda"]
+            )
+            store_recs.drop(columns=["avg_sizes_per_style_eda"], inplace=True)
     except Exception:
         pass  # EDA file absent — SOH columns simply won't appear
 
@@ -583,15 +585,17 @@ elif page == "📊 Allocation Table":
         floor_total        = int(store_recs["floor_share"].sum())
         free_budget        = 100 - floor_total
         buckets_with_extra = int((store_recs["extra_share"] > 0).sum())
-        top_extra_bucket   = store_recs.loc[
-            store_recs["extra_share"].idxmax(), "bucket_key"
-        ]
-        top_extra_pct      = int(store_recs["extra_share"].max())
+        _extra_nonzero = store_recs[store_recs["extra_share"] > 0]
+        top_extra_bucket = (
+            _extra_nonzero.loc[_extra_nonzero["extra_share"].idxmax(), "bucket_key"]
+            if not _extra_nonzero.empty else "—"
+        )
+        top_extra_pct = int(store_recs["extra_share"].max()) if not store_recs.empty else 0
 
     # ── KPI strip ────────────────────────────────────────────────────────
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Active Buckets", len(store_recs))
-    c2.metric("Display Capacity", f"{cap} styles")
+    c2.metric("Display Capacity", f"{cap} hangers", help="Min Option Count = physical hanger count. Each style uses avg_sizes hangers.")
     if has_floor:
         c3.metric(
             "Floor Budget",
@@ -610,7 +614,8 @@ elif page == "📊 Allocation Table":
     st.markdown("#### Full allocation detail")
     cols_to_show = [
         "signal_icon", "bucket_key", "floor_share", "display_share_pct",
-        "Style Slots", "style_count_in_bucket", "avg_weekly_soh",
+        "hanger_slots", "style_slots", "avg_sizes_per_style",
+        "style_count_in_bucket", "avg_weekly_soh",
         "revenue_rate", "expected_rev_index",
     ]
     col_rename = {
@@ -618,7 +623,9 @@ elif page == "📊 Allocation Table":
         "bucket_key":            "Bucket",
         "floor_share":           "Floor %",
         "display_share_pct":     "Recommended %",
-        "Style Slots":           "Rec. Style Slots",
+        "hanger_slots":          "Rec. Hanger Spaces",
+        "style_slots":           "Rec. Style-Size Count",
+        "avg_sizes_per_style":   "Avg Sizes/Style",
         "style_count_in_bucket": "Available Styles (SOH)",
         "avg_weekly_soh":        "Avg Weekly SOH",
         "revenue_rate":          "Revenue Rate (₹/unit)",
@@ -627,11 +634,15 @@ elif page == "📊 Allocation Table":
     if not has_floor:
         cols_to_show = [c for c in cols_to_show if c != "floor_share"]
         col_rename.pop("floor_share", None)
-    # Only include SOH columns if they were successfully merged
-    for _soh_col in ["style_count_in_bucket", "avg_weekly_soh"]:
-        if _soh_col not in store_recs.columns:
-            cols_to_show = [c for c in cols_to_show if c != _soh_col]
-            col_rename.pop(_soh_col, None)
+    # Round avg_weekly_soh to nearest integer for display
+    if "avg_weekly_soh" in store_recs.columns:
+        store_recs["avg_weekly_soh"] = store_recs["avg_weekly_soh"].round(0).astype(int)
+
+    # Only include columns that are actually present
+    for _col in ["style_count_in_bucket", "avg_weekly_soh", "avg_sizes_per_style"]:
+        if _col not in store_recs.columns:
+            cols_to_show = [c for c in cols_to_show if c != _col]
+            col_rename.pop(_col, None)
 
     st.dataframe(
         store_recs[cols_to_show].rename(columns=col_rename),
@@ -639,13 +650,20 @@ elif page == "📊 Allocation Table":
         hide_index=True,
     )
 
+    st.caption(
+        "**Rec. Hanger Spaces** = Recommended % × display capacity (physical pegs allocated to bucket). "
+        "**Rec. Style-Size Count** = Hanger Spaces ÷ Avg Sizes/Style (distinct styles to arrange on those pegs; each style occupies Avg Sizes/Style hangers). "
+        "**Rec. Style-Size Count ≤ Available Styles (SOH)** always — C7 ensures you never recommend more styles than stock."
+    )
+
     st.markdown(
-        f"**Style slots used:** {store_recs['Style Slots'].sum()} / {cap} &nbsp;|&nbsp; "
+        f"**Hanger spaces used:** {store_recs['hanger_slots'].sum()} / {cap} &nbsp;|&nbsp; "
+        f"**Style-size count total:** {store_recs['style_slots'].sum()} &nbsp;|&nbsp; "
         f"**Total share:** {store_recs['display_share_pct'].sum()}%",
         unsafe_allow_html=True,
     )
     if "style_count_in_bucket" in store_recs.columns:
-        soh_ok = (store_recs["Style Slots"] <= store_recs["style_count_in_bucket"]).all()
+        soh_ok = (store_recs["style_slots"] <= store_recs["style_count_in_bucket"]).all()
         if not soh_ok:
             st.warning(
                 "One or more buckets have fewer available styles in SOH than the recommended slot count. "
@@ -1434,6 +1452,92 @@ elif page == "🔍 EDA Explorer":
                     fig_soh_rate.update_layout(legend={**_LEGEND, "title": "Signal"})
                     st.plotly_chart(fig_soh_rate, use_container_width=True)
 
+            # ── Size run analysis ─────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### Size Run by Category")
+            st.caption(
+                "Avg distinct sizes per style (SOH > 0). "
+                "display_capacity = hangers; each style needs avg_sizes hangers. "
+                "Style slots = hangers ÷ avg_sizes."
+            )
+
+            if "avg_sizes_per_style" in soh_data.columns:
+                size_summary = (
+                    soh_data.groupby("category")
+                    .agg(
+                        avg_sizes      = ("avg_sizes_per_style", "mean"),
+                        max_sizes      = ("avg_sizes_per_style", "max"),
+                        min_sizes      = ("avg_sizes_per_style", "min"),
+                        total_styles   = ("style_count_in_bucket", "sum") if "style_count_in_bucket" in soh_data.columns else ("avg_sizes_per_style", "count"),
+                    )
+                    .reset_index()
+                    .sort_values("avg_sizes", ascending=False)
+                )
+                size_summary["hangers_per_style"] = size_summary["avg_sizes"].round(1)
+
+                sz1, sz2 = st.columns(2)
+                with sz1:
+                    fig_sizes = px.bar(
+                        size_summary,
+                        x="category", y="avg_sizes",
+                        color="category",
+                        color_discrete_sequence=px.colors.qualitative.Set2,
+                        text=size_summary["avg_sizes"].round(1),
+                        labels={"avg_sizes": "Avg Sizes / Style", "category": ""},
+                    )
+                    fig_sizes.update_traces(textposition="outside")
+                    fig_sizes.update_layout(
+                        title=dict(text="Avg Sizes per Style by Category (= Hangers per Style)", font=dict(size=13, color="#f8fafc")),
+                        showlegend=False,
+                        height=340,
+                        xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                        yaxis=dict(title="Avg Sizes / Style", gridcolor="#334155"),
+                        **_CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig_sizes, use_container_width=True)
+
+                with sz2:
+                    # Effective style capacity per category given avg sizes
+                    # (how many styles of this category fit in 400 hangers)
+                    cap_val = 400  # default; would be store-specific in full version
+                    size_summary["effective_style_capacity"] = (
+                        cap_val / size_summary["avg_sizes"]
+                    ).round(0).astype(int)
+                    fig_cap = px.bar(
+                        size_summary,
+                        x="category", y="effective_style_capacity",
+                        color="category",
+                        color_discrete_sequence=px.colors.qualitative.Pastel,
+                        text="effective_style_capacity",
+                        labels={"effective_style_capacity": "Max Styles (400 hangers ÷ avg_sizes)", "category": ""},
+                    )
+                    fig_cap.update_traces(textposition="outside")
+                    fig_cap.update_layout(
+                        title=dict(text="Effective Style Capacity per Category (400 hangers)", font=dict(size=13, color="#f8fafc")),
+                        showlegend=False,
+                        height=340,
+                        xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                        yaxis=dict(title="Effective Style Capacity", gridcolor="#334155"),
+                        **_CHART_LAYOUT,
+                    )
+                    st.plotly_chart(fig_cap, use_container_width=True)
+
+                st.dataframe(
+                    size_summary[["category", "avg_sizes", "min_sizes", "max_sizes", "effective_style_capacity"]]
+                    .rename(columns={
+                        "category":                 "Category",
+                        "avg_sizes":                "Avg Sizes/Style",
+                        "min_sizes":                "Min",
+                        "max_sizes":                "Max",
+                        "effective_style_capacity": "Effective Style Capacity (400 hangers)",
+                    })
+                    .assign(**{"Avg Sizes/Style": lambda d: d["Avg Sizes/Style"].round(1)}),
+                    use_container_width=True, hide_index=True,
+                )
+            else:
+                st.info("Rerun fabric_connector.py to get size data (style_size_count column required).")
+
+            st.markdown("---")
             # Store-level SOH summary
             st.markdown("#### SOH by Store")
             store_soh = (
@@ -1722,16 +1826,23 @@ elif page == "🔍 EDA Explorer":
             st.caption(f"SOH snapshot date: **{snap_date}** &nbsp;·&nbsp; {len(sb_df):,} store-style combinations")
 
             # ── KPI strip ─────────────────────────────────────────────────
+            broken       = len(sb_df[sb_df["size_break_status"] == "BROKEN"])
+            at_risk      = len(sb_df[sb_df["size_break_status"] == "AT RISK"])
+            pivotable    = len(sb_df[sb_df["pivotability"] == "PIVOTABLE"])
+            replenish_now = len(sb_df[sb_df["replenishment_urgency"] == "REPLENISH NOW"])
+            unique_broken = sb_df[sb_df["size_break_status"] == "BROKEN"]["style_code"].nunique()
+
             sb1, sb2, sb3, sb4, sb5 = st.columns(5)
-            sb1.metric("Total Styles", f"{sb_df['style_code'].nunique():,}")
-            broken = (sb_df["size_break_status"] == "BROKEN").sum()
-            at_risk = (sb_df["size_break_status"] == "AT RISK").sum()
-            pivotable = (sb_df["pivotability"] == "PIVOTABLE").sum()
-            replenish_now = (sb_df["replenishment_urgency"] == "REPLENISH NOW").sum()
-            sb2.metric("Broken Styles", f"{broken:,}", delta=f"-{broken} styles", delta_color="inverse")
-            sb3.metric("At Risk", f"{at_risk:,}", delta=f"-{at_risk} styles", delta_color="inverse")
+            sb1.metric("Store-Style Combinations", f"{len(sb_df):,}")
+            sb2.metric("Broken", f"{broken:,}", delta=f"-{broken}", delta_color="inverse")
+            sb3.metric("At Risk", f"{at_risk:,}", delta=f"-{at_risk}", delta_color="inverse")
             sb4.metric("Pivotable", f"{pivotable:,}")
             sb5.metric("Replenish Now", f"{replenish_now:,}", delta_color="inverse")
+
+            st.caption(
+                f"All counts are store × style combinations. "
+                f"Unique broken styles across fleet: **{unique_broken:,}**"
+            )
 
             st.markdown("---")
 

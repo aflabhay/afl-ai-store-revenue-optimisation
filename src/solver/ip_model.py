@@ -109,21 +109,54 @@ def solve_store(
     bucket_keys  = buckets["bucket_key"].tolist()
     rates        = dict(zip(buckets["bucket_key"], buckets["revenue_rate"]))
 
-    # C7 — SOH style cap: max style slots this bucket can physically fill.
-    # style_count_in_bucket = count of styles with Opening_SOH > 0 (from FACT_FNO_BASE_SOH).
-    # Only styles with actual stock can occupy display slots — zero-SOH styles excluded.
-    # cap_pct = style_count / display_capacity * 100, floored at 1%.
-    # Falls back to global max_share when column is absent (no SOH data).
+    # C7 — SOH hanger cap: never recommend more hangers than available SOH can fill.
+    # display_capacity = Min Option Count = total physical hangers in store (NOT style count).
+    # Each style occupies avg_sizes_per_style hangers (one hanger per size on display).
+    # e.g. SHIRT with 5 sizes in stock needs 5 hangers per style.
+    #
+    # Formula: soh_hanger_cap% = style_count * avg_sizes / display_capacity * 100
+    # This caps the hanger allocation so we never recommend more hanger-slots than
+    # the bucket can physically fill with complete size runs.
+    #
+    # C7 is applied as a SEPARATE hard PuLP constraint (not mixed into dynamic_caps)
+    # to prevent the proportional-cap guard from silently overriding it.
+    #
+    # When total hangers required < display_capacity, caps are normalised proportionally
+    # to sum to 100 so the LP stays feasible while preserving relative SOH proportions.
+    sizes_per_bucket = {
+        row.bucket_key: max(1.0, getattr(row, "avg_sizes_per_style", 1.0))
+        for row in buckets.itertuples()
+    }
+    style_count_per_bucket = {
+        row.bucket_key: int(getattr(row, "style_count_in_bucket", 0))
+        for row in buckets.itertuples()
+    }
+
     if "style_count_in_bucket" in buckets.columns:
-        soh_style_cap_pct = {
+        raw_soh_caps = {
             row.bucket_key: max(
-                1,  # always allow at least 1%
-                int(row.style_count_in_bucket / display_capacity * 100),
+                1,
+                int(row.style_count_in_bucket * sizes_per_bucket[row.bucket_key]
+                    / display_capacity * 100),
             )
             for row in buckets.itertuples()
         }
+        cap_sum = sum(raw_soh_caps.values())
+        if cap_sum < config.total_share:
+            # Normalise: scale all caps up proportionally so they sum to >= 100
+            scale = config.total_share / cap_sum
+            soh_style_cap_pct = {b: max(1, round(v * scale)) for b, v in raw_soh_caps.items()}
+            # Fix any integer-rounding deficit by adding to the largest bucket
+            deficit = config.total_share - sum(soh_style_cap_pct.values())
+            if deficit > 0:
+                largest = max(soh_style_cap_pct, key=soh_style_cap_pct.get)
+                soh_style_cap_pct[largest] += deficit
+        else:
+            soh_style_cap_pct = raw_soh_caps
+        c7_feasible = True  # always apply C7 (normalised when needed)
     else:
         soh_style_cap_pct = {b: config.max_share for b in bucket_keys}
+        c7_feasible = False
 
     # ── Dynamic proportional floors ──────────────────────────────────────
     # Each bucket is guaranteed at least (floor_weight × its proportional
@@ -149,18 +182,12 @@ def solve_store(
 
     # ── Dynamic proportional caps ─────────────────────────────────────────
     # Each bucket is capped at (cap_multiplier × its proportional fair share).
-    # This prevents all free budget piling into the top 1-2 buckets:
-    # once a top bucket hits its cap the solver is forced to spread remaining
-    # free budget to the next-highest-rate bucket, and so on.
-    #
-    # Example: proportional_share=20%, cap_multiplier=1.5 → cap=30%
-    # The solver can give this bucket at most 30%, not 45%, so more budget
-    # flows to buckets 3, 4, 5 which may have similar revenue rates.
+    # NOTE: soh_style_cap_pct is NOT mixed in here — C7 is applied separately
+    # as a hard PuLP constraint below so it cannot be overridden by the guard.
     if total_rate > 0 and config.cap_multiplier > 0:
         dynamic_caps = {
             b: min(
                 config.max_share,
-                soh_style_cap_pct[b],   # C7: never exceed available SOH styles
                 max(
                     dynamic_floors[b],  # cap must always be ≥ floor
                     round(rates[b] / total_rate * config.total_share * config.cap_multiplier),
@@ -169,11 +196,41 @@ def solve_store(
             for b in bucket_keys
         }
     else:
-        dynamic_caps = {b: min(config.max_share, soh_style_cap_pct[b]) for b in bucket_keys}
+        dynamic_caps = {b: config.max_share for b in bucket_keys}
 
-    # Guard: total cap must cover total_share or the LP is infeasible.
+    # Guard 1: total proportional cap must cover total_share or the LP is infeasible.
+    # This guard only affects proportional caps — C7 (soh_style_cap_pct) is
+    # enforced separately below and is not affected by this override.
     if sum(dynamic_caps.values()) < config.total_share:
         dynamic_caps = {b: config.max_share for b in bucket_keys}
+
+    # Guard 2: combined effective upper bound (min of proportional cap and SOH cap)
+    # must also sum to >= total_share when C7 is active.
+    # Scenario: store has high-revenue buckets with only 1-2 styles (soh_cap=1%) AND
+    # large-SOH buckets whose proportional caps are tight (cap=8%). The effective UB
+    # for each is min(cap, soh_cap) and their sum may be < 100.
+    # In that case, relax proportional caps to max_share so C1 can be satisfied.
+    # Note: soh_style_cap_pct has already been normalised to sum to >= 100, so this
+    # guard only fires when the PROPORTIONAL caps are tighter than the SOH caps.
+    if c7_feasible:
+        effective_ub_sum = sum(
+            min(dynamic_caps[b], soh_style_cap_pct[b]) for b in bucket_keys
+        )
+        if effective_ub_sum < config.total_share:
+            dynamic_caps = {b: config.max_share for b in bucket_keys}
+
+    # ── Reconcile floors with C7 ─────────────────────────────────────────
+    # If C7 will be applied as a hard constraint, ensure dynamic_floors[b]
+    # never exceeds soh_style_cap_pct[b]. A floor above the SOH cap would
+    # make the LP immediately infeasible for that variable.
+    if c7_feasible:
+        dynamic_floors = {
+            b: min(dynamic_floors[b], soh_style_cap_pct[b])
+            for b in bucket_keys
+        }
+        # Re-check floor feasibility after capping
+        if sum(dynamic_floors.values()) >= config.total_share:
+            dynamic_floors = {b: config.min_share for b in bucket_keys}
 
     # ── Build the LP problem ─────────────────────────────────────────────
     prob = pulp.LpProblem(f"store_{store_id}_allocation", pulp.LpMaximize)
@@ -213,6 +270,16 @@ def solve_store(
     # Buckets with no sales history are excluded from the buckets DataFrame
     # before calling this function (handled in run_solver.py)
 
+    # ── C7: SOH style cap — never recommend more style slots than available SOH ─
+    # Applied as a hard constraint only when the sum of all per-bucket SOH caps
+    # is >= 100 (i.e., C1 and C7 are simultaneously satisfiable).
+    # When total SOH is too thin to fill 100% (e.g. a store with very few styles),
+    # C7 is relaxed so the LP stays feasible — the underlying data issue should be
+    # addressed by replenishment, not masked by ignoring the constraint entirely.
+    if c7_feasible:
+        for b in bucket_keys:
+            prob += x[b] <= soh_style_cap_pct[b], f"C7_soh_cap_{b}"
+
     # ── Solve ────────────────────────────────────────────────────────────
     # Prefer HiGHS (arm64-native, works on Mac Apple Silicon + Ubuntu).
     # Fall back to bundled CBC (works on Ubuntu x86_64 and any platform
@@ -243,20 +310,35 @@ def solve_store(
     total_rev_index = 0
 
     for b in bucket_keys:
-        share = int(round(pulp.value(x[b])))
-        rate  = rates[b]
-        floor = dynamic_floors[b]
-        style_slots = int(share / 100 * display_capacity)  # floor to never exceed capacity
-        rev_index   = share * rate
+        share        = int(round(pulp.value(x[b])))
+        rate         = rates[b]
+        floor        = dynamic_floors[b]
+        avg_sizes    = sizes_per_bucket.get(b, 1.0)
+        # hanger_slots: physical hangers allocated to this bucket.
+        # Use int() truncation (not round) so sum never exceeds display_capacity.
+        hanger_slots = int(share / 100 * display_capacity)
+        # style_slots: distinct styles that can be displayed with those hangers
+        # = floor(hanger_slots / avg_sizes), capped at style_count_in_bucket.
+        # Cap prevents rare categories (e.g. JACKET) with avg_sizes fallback=1.0
+        # from recommending more style slots than actual SOH styles exist.
+        style_count  = style_count_per_bucket.get(b, 0)
+        style_slots  = max(1, int(hanger_slots / avg_sizes)) if hanger_slots > 0 else 0
+        if style_count > 0:
+            style_slots = min(style_slots, style_count)
+        rev_index    = share * rate
 
-        cap = dynamic_caps[b]
+        cap     = dynamic_caps[b]
+        soh_cap = soh_style_cap_pct[b]
         results.append({
             "bucket_key":          b,
             "display_share_pct":   share,
             "revenue_rate":        round(rate, 2),
-            "floor_share":         floor,  # proportional floor (guaranteed minimum)
-            "cap_share":           cap,    # proportional cap (maximum allowed)
-            "style_slots":         style_slots,
+            "floor_share":         floor,        # proportional floor (guaranteed minimum)
+            "cap_share":           cap,          # proportional cap (maximum allowed)
+            "soh_cap_pct":         soh_cap,      # C7 hanger cap %
+            "avg_sizes_per_style": round(avg_sizes, 1),
+            "hanger_slots":        hanger_slots, # physical hangers required
+            "style_slots":         style_slots,  # distinct styles = hanger_slots / avg_sizes
             "expected_rev_index":  round(rev_index, 2),
             # INCREASE = hit its proportional cap (solver maxed this bucket out)
             # HOLD     = above floor, below cap (partial free budget allocated)
@@ -269,7 +351,8 @@ def solve_store(
         })
         total_rev_index += rev_index
 
-    style_slots_used = sum(r["style_slots"] for r in results)
+    hanger_slots_used = sum(r["hanger_slots"] for r in results)
+    style_slots_used  = sum(r["style_slots"]  for r in results)
 
     # Validation assertions — should never fail
     assert sum(r["display_share_pct"] for r in results) == config.total_share, "C1 violated"
@@ -277,16 +360,20 @@ def solve_store(
         config.min_share <= r["display_share_pct"] <= r["cap_share"]
         for r in results
     ), "C3/C4 violated"
-    assert style_slots_used <= display_capacity, "C5 violated"
+    # C5: total hangers used must not exceed display capacity.
+    # style_slots_used < hanger_slots_used (since style_slots = hanger_slots / avg_sizes)
+    assert hanger_slots_used <= display_capacity, "C5 violated"
 
     return {
         "store_id":                    store_id,
         "status":                      "OPTIMAL",
         "buckets":                     results,
         "total_expected_revenue_index": round(total_rev_index, 2),
+        "hanger_slots_used":           hanger_slots_used,
         "style_slots_used":            style_slots_used,
         "display_capacity":            display_capacity,
-        "message":                     "OK",
+        "c7_applied":                  c7_feasible,
+        "message":                     "OK" if c7_feasible else "C7 relaxed — total SOH styles < display capacity",
     }
 
 
@@ -303,8 +390,11 @@ def format_output_table(solver_result: dict) -> pd.DataFrame:
             "display_share_pct":  b["display_share_pct"],
             "floor_share":        b["floor_share"],
             "cap_share":          b["cap_share"],
-            "revenue_rate":       b["revenue_rate"],
+            "soh_cap_pct":        b["soh_cap_pct"],
+            "avg_sizes_per_style":b["avg_sizes_per_style"],
+            "hanger_slots":       b["hanger_slots"],
             "style_slots":        b["style_slots"],
+            "revenue_rate":       b["revenue_rate"],
             "expected_rev_index": b["expected_rev_index"],
             "signal":             b["signal"],
         })

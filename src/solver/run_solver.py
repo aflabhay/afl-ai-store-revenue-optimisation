@@ -15,9 +15,14 @@ Requires:
 
 import argparse
 import json
+import sys
 import pandas as pd
 from datetime import date
 from pathlib import Path
+
+# Ensure project root is on sys.path so `src.*` imports work when running
+# directly as `python src/solver/run_solver.py` (without PYTHONPATH=.)
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 from src.solver.ip_model import solve_store, format_output_table, SolverConfig
 
@@ -62,10 +67,12 @@ def run_all_stores(
             continue
 
         # C6: only existing buckets (already enforced by filtering revenue_rate > 0)
-        # Pass style_count_in_bucket when available so the solver respects SOH limits
+        # Pass style_count_in_bucket and avg_sizes_per_style for C7 hanger cap
         bucket_cols = ["bucket_key", "revenue_rate"]
         if "style_count_in_bucket" in store_rates.columns:
             bucket_cols.append("style_count_in_bucket")
+        if "avg_sizes_per_style" in store_rates.columns:
+            bucket_cols.append("avg_sizes_per_style")
 
         result = solve_store(
             store_id=store_id,
@@ -78,7 +85,7 @@ def run_all_stores(
         print(
             f"  {status_icon}  Store {store_id:>5} | "
             f"{len(store_rates):>2} buckets | "
-            f"capacity {display_capacity:>3} styles | "
+            f"capacity {display_capacity:>3} hangers | "
             f"status: {result['status']}"
         )
 
@@ -120,6 +127,8 @@ def main():
     rate_cols = ["store_id", "bucket_key", "revenue_rate"]
     if "style_count_in_bucket" in eda_df.columns:
         rate_cols.append("style_count_in_bucket")
+    if "avg_sizes_per_style" in eda_df.columns:
+        rate_cols.append("avg_sizes_per_style")
 
     rates_df = (
         eda_df[rate_cols]

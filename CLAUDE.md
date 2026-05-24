@@ -94,8 +94,22 @@ New approach: generate `priceband_mapping.csv` every Monday from data, classify 
 ```
 proportional_fair_share[b] = revenue_rate[b] / SUM(revenue_rate) * 100
 floor[b] = max(1%, proportional_fair_share[b] * floor_weight)   # default 0.50
-cap[b]   = min(45%, proportional_fair_share[b] * cap_multiplier, soh_cap[b])  # default 1.5
+cap[b]   = min(45%, proportional_fair_share[b] * cap_multiplier)  # default 1.5
 ```
+
+### C7 — SOH hanger cap (critical: separate hard constraint)
+
+- `display_capacity` = **physical hangers** (Min Option Count), NOT style count
+- Each style occupies `avg_sizes_per_style` hangers (one hanger per size on display)
+- `avg_sizes_per_style` computed at **category level** fleet-wide (not per bucket) — sizes are a category property, not priceband-specific
+- `soh_hanger_cap_pct[b] = max(1, int(style_count[b] * avg_sizes[b] / display_capacity * 100))`
+- C7 is a **separate hard PuLP constraint** `prob += x[b] <= soh_hanger_cap_pct[b]` — NOT mixed into variable bounds
+- When `sum(soh_caps) < 100`: **normalise proportionally** so they sum to 100 → C7 always applied
+- Dynamic floors reconciled to `min(floor, soh_cap)` before LP build
+- Guard 2: if `sum(min(proportional_cap, soh_cap)) < 100`, relax proportional caps to 45%
+- `hanger_slots = int(display_share% / 100 * display_capacity)` — physical hangers allocated
+- `style_slots = min(int(hanger_slots / avg_sizes), style_count_in_bucket)` — distinct styles to show (capped at SOH)
+- `style_slots` always ≤ `style_count_in_bucket` — C7 + explicit cap in output
 
 ### Revenue rate formula
 
@@ -168,6 +182,57 @@ python-dotenv>=1.0.0
 
 ---
 
+## Deployment — Azure App Service (Ubuntu x86_64)
+
+### Weekly data push (run locally on Mac after pipeline)
+
+```bash
+# 1. Run pipeline locally
+python src/data_pipeline/fabric_connector.py
+PYTHONPATH=. python src/solver/run_solver.py --store all
+
+# 2. SCP processed files to VM
+TODAY=$(date +%Y-%m-%d)
+VM=<user>@<vm-hostname>
+DEST=/home/site/wwwroot/data/processed
+
+scp data/processed/eda_data_${TODAY}.csv       $VM:$DEST/
+scp data/processed/recommendations_${TODAY}.csv $VM:$DEST/
+scp data/processed/solver_results_${TODAY}.json $VM:$DEST/
+scp data/processed/priceband_config.json        $VM:$DEST/
+scp data/processed/priceband_mapping.csv        $VM:$DEST/
+scp data/processed/store_capacity_real.csv      $VM:$DEST/
+scp data/processed/size_breaks_latest.csv       $VM:$DEST/
+
+# 3. Pull latest code + restart
+ssh $VM "cd /home/site/wwwroot && git pull && supervisorctl restart streamlit"
+# OR: az webapp restart --name <app-name> --resource-group <rg-name>
+```
+
+### VM startup command (Azure Portal → App Service → Configuration)
+
+```bash
+/home/site/wwwroot/venv/bin/streamlit run /home/site/wwwroot/src/streamlit_app/app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true
+```
+
+### First-time VM setup
+
+```bash
+ssh <user>@<vm-hostname>
+mkdir -p /home/site/wwwroot && cd /home/site/wwwroot
+git clone https://github.com/aflabhay/afl-ai-store-revenue-optimisation.git .
+python3.11 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env && nano .env   # fill in FABRIC_CONNECTION_STRING
+
+# Install ODBC Driver 18 (required for Fabric)
+curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+sudo apt-get update && sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+```
+
+---
+
 ## What NOT to do
 
 - Do not add REGION back anywhere (removed intentionally)
@@ -179,3 +244,8 @@ python-dotenv>=1.0.0
 - Do not reference `LOAD_RUN_DATE` or `SAP_STORE_ID` — old column names from the deprecated SOH table
 - Do not add `* 4` to the revenue_rate denominator — the formula is `bucket_revenue_4w / avg_weekly_soh`
 - Do not count zero-SOH styles in `style_count_in_bucket` — only count styles with `style_avg_daily_soh > 0`
+- Do not mix soh_hanger_cap_pct into dynamic_caps — C7 must be a separate hard PuLP constraint
+- Do not skip C7 normalisation — when sum(soh_caps) < 100, normalise proportionally before applying
+- Do not compute `avg_sizes_per_style` at bucket level — always use category-level fleet-wide average
+- Do not equate `hanger_slots` with `style_slots` — hanger_slots = styles × sizes; style_slots = hanger_slots ÷ avg_sizes
+- `style_slots` must always be capped at `style_count_in_bucket` in solver output (rare categories fall back to avg_sizes=1)

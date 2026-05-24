@@ -119,6 +119,22 @@ soh_style AS (
         GROUP BY b.STORE_CODE, b.STYLECODE, b.INVENTORY_DATE
     ) s
     GROUP BY s.STORE_CODE, s.STYLECODE
+),
+soh_sizes AS (
+    -- Count distinct sizes with Opening_SOH > 0 per store x style.
+    -- Used to compute how many physical hangers each style occupies on display.
+    -- display_capacity = total hangers; each style needs style_size_count hangers.
+    SELECT
+        b.STORE_CODE AS store_id,
+        b.STYLECODE  AS style_code,
+        COUNT(DISTINCT b.SIZE) AS style_size_count
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH] b
+    INNER JOIN active_arrow_stores st ON b.STORE_CODE = st.STORE_CODE
+    CROSS JOIN date_bounds d
+    WHERE b.INVENTORY_DATE >= d.window_start
+      AND b.INVENTORY_DATE <= d.window_end
+      AND b.Opening_SOH    >  0
+    GROUP BY b.STORE_CODE, b.STYLECODE
 )
 SELECT
     sl.store_id,
@@ -138,6 +154,8 @@ SELECT
     COALESCE(so.style_min_soh,        0)    AS style_min_soh,
     COALESCE(so.style_max_soh,        0)    AS style_max_soh,
     COALESCE(so.style_soh_days,       0)    AS style_soh_days,
+    -- Distinct sizes in stock — determines hanger count per style on display
+    COALESCE(sz.style_size_count,     0)    AS style_size_count,
     d.window_start,
     d.window_end
 FROM sales_style sl
@@ -145,6 +163,9 @@ INNER JOIN active_arrow_stores st ON st.STORE_CODE = sl.store_id
 LEFT JOIN soh_style so
     ON  so.store_id   = sl.store_id
     AND so.style_code = sl.style_code
+LEFT JOIN soh_sizes sz
+    ON  sz.store_id   = sl.store_id
+    AND sz.style_code = sl.style_code
 CROSS JOIN date_bounds d
 ORDER BY sl.store_id, sl.category, sl.style_code;
 """
@@ -422,6 +443,30 @@ def _aggregate_to_buckets(style_df: pd.DataFrame) -> pd.DataFrame:
     ).reset_index()
 
     style_df.drop(columns=["_has_soh"], inplace=True)
+
+    # avg_sizes_per_style: average distinct sizes per style at CATEGORY level (not bucket).
+    # Sizes are a property of a category (SHIRT = S/M/L/XL/XXL regardless of priceband).
+    # Computing at category level avoids sampling noise from priceband splits.
+    # Fleet-wide average across all stores and all SOH > 0 styles in the category.
+    if "style_size_count" in style_df.columns:
+        _soh_styles = style_df[style_df["style_avg_daily_soh"] > 0]
+        _category_avg_sizes = (
+            _soh_styles.groupby("category")["style_size_count"]
+            .mean()
+            .reset_index()
+            .rename(columns={"style_size_count": "avg_sizes_per_style"})
+        )
+        bucket = bucket.merge(_category_avg_sizes, on="category", how="left")
+        bucket["avg_sizes_per_style"] = bucket["avg_sizes_per_style"].fillna(1.0).round(2)
+    else:
+        bucket["avg_sizes_per_style"] = 1.0
+
+    # hangers_required: physical hanger count if all SOH-eligible styles are displayed.
+    # display_capacity (Min Option Count) is hanger count, NOT style count.
+    # Correct display slots = floor(display_share% * display_capacity / avg_sizes_per_style)
+    bucket["hangers_required"] = (
+        bucket["style_count_in_bucket"] * bucket["avg_sizes_per_style"]
+    ).round(0).astype(int)
 
     # Derived metrics
     bucket["discount_pct"] = (

@@ -32,6 +32,9 @@ For each Arrow store, every Sunday night:
 | **display_capacity[store]** | Min Option Count — number of distinct styles the store can display, from VM guidelines |
 | **revenue_rate[store, bucket]** | Revenue generated per unit of SOH committed to this bucket over 4 weeks: `bucket_revenue_4w / (avg_weekly_soh x 4)` — units: Rs/unit/4-week period |
 | **style_count_in_bucket** | Distinct styles with SOH > 0 in this bucket — caps style slot recommendations to only physically fulfillable options |
+| **avg_sizes_per_style** | Fleet-wide average distinct sizes per style for this category (e.g. SHIRT ≈ 5, TROUSER ≈ 5, SUIT ≈ 4). Computed at category level — sizes don't vary by priceband. |
+| **hanger_slots** | Physical hangers allocated to bucket = `display_share% × display_capacity`. `display_capacity` is hanger count, NOT style count. |
+| **style_slots (Rec. Style-Size Count)** | Distinct styles to arrange = `floor(hanger_slots / avg_sizes_per_style)`, capped at `style_count_in_bucket`. Always ≤ available SOH styles. |
 | **Priceband** | Economy / Mid / Premium — thresholds computed per category from MRP p33/p67 percentiles, rounded to Rs 500 |
 | **Monday rearrangement** | Weekly physical display rearrangement based on solver recommendations |
 | **Phase 1** | IP optimisation using rolling 4-week revenue rates (current) |
@@ -85,7 +88,7 @@ Maximise:  SUM over buckets [ display_share[bucket] x revenue_rate[bucket] ]
 Pure linear objectives produce "bang-bang" allocations — the solver concentrates all free budget in the single highest-rate bucket. To prevent this:
 
 - **Dynamic floor** = `max(1%, proportional_fair_share x floor_weight)` — each bucket guaranteed at least 50% of its proportional fair share (default `floor_weight = 0.50`)
-- **Dynamic cap** = `min(45%, proportional_fair_share x cap_multiplier, soh_style_cap_pct)` — each bucket capped at 1.5x its proportional fair share (default `cap_multiplier = 1.5`)
+- **Dynamic cap** = `min(45%, proportional_fair_share x cap_multiplier)` — each bucket capped at 1.5x its proportional fair share (default `cap_multiplier = 1.5`)
 
 Where `proportional_fair_share[bucket] = revenue_rate[bucket] / SUM(revenue_rate) x 100`.
 
@@ -95,6 +98,28 @@ This forces the solver to spread the free allocation budget across multiple buck
 - `INCREASE` — bucket hit its proportional cap (solver maxed it out — show more)
 - `HOLD` — bucket above floor, below cap (solver allocated some but not all free budget)
 - `REDUCE` — bucket at its proportional floor (solver gave it minimum — show less)
+
+### C7 Implementation Detail — Hanger-Aware Model
+
+`display_capacity` (Min Option Count from VM guidelines) = **physical hangers**, not style count. Each style occupies `avg_sizes_per_style` hangers (one hanger per size on display). A SHIRT with S/M/L/XL/XXL needs 5 hangers; a SUIT with 38/40/42/44 needs 4 hangers.
+
+```
+hanger_cap%[b] = style_count[b] × avg_sizes[b] / display_capacity × 100
+hanger_slots   = int(display_share% / 100 × display_capacity)   ← physical hangers
+style_slots    = min(floor(hanger_slots / avg_sizes), style_count)  ← distinct styles
+```
+
+`avg_sizes_per_style` is computed at **category level** fleet-wide (not per bucket or store) since sizes are a category property, not priceband-specific.
+
+C7 is a **separate hard PuLP constraint** so it cannot be overridden by the proportional-cap guard:
+
+```python
+if c7_feasible:
+    for b in bucket_keys:
+        prob += x[b] <= soh_hanger_cap_pct[b], f"C7_soh_cap_{b}"
+```
+
+When a store's total hanger requirement < `display_capacity`, SOH caps are **normalised proportionally** to sum to 100 so the LP stays feasible. Dynamic floors are reconciled to `min(floor, soh_cap)` before the LP is built. `style_slots` is additionally capped at `style_count_in_bucket` in the output to handle rare categories with no fleet-wide size average.
 
 ### Solver Backend
 
@@ -270,7 +295,106 @@ afl-ai-store-revenue-optimisation/
 
 ---
 
-## 11. Key Business Rules
+## 11. Deployment — Azure App Service (Ubuntu VM)
+
+The Streamlit app is hosted on an Azure App Service VM running Ubuntu x86_64. The data pipeline runs locally (Mac) and processed outputs are pushed to the VM.
+
+### VM Environment Setup (first time)
+
+```bash
+# SSH into the VM
+ssh <user>@<vm-hostname>
+
+# Install Python 3.11 and pip
+sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv python3-pip
+
+# Create app directory
+mkdir -p /home/site/wwwroot
+cd /home/site/wwwroot
+
+# Clone the repo
+git clone https://github.com/aflabhay/afl-ai-store-revenue-optimisation.git .
+
+# Create virtualenv and install deps
+python3.11 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Create .env from template
+cp .env.example .env
+# Edit .env and fill in FABRIC_CONNECTION_STRING etc.
+nano .env
+```
+
+### Azure App Service startup command
+
+Set this as the startup command in Azure Portal → App Service → Configuration → Startup Command:
+
+```bash
+/home/site/wwwroot/venv/bin/streamlit run /home/site/wwwroot/src/streamlit_app/app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true
+```
+
+### Weekly deployment workflow (every Sunday)
+
+Run this on your local Mac after the pipeline completes:
+
+```bash
+# Step 1 — regenerate all processed outputs locally
+cd /path/to/afl-ai-store-revenue-optimisation
+python src/data_pipeline/fabric_connector.py
+PYTHONPATH=. python src/solver/run_solver.py --store all
+
+# Step 2 — push processed data files to VM via SCP
+scp data/processed/eda_data_$(date +%Y-%m-%d).csv         <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/recommendations_$(date +%Y-%m-%d).csv  <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/solver_results_$(date +%Y-%m-%d).json  <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/priceband_config.json                   <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/priceband_mapping.csv                   <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/store_capacity_real.csv                 <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+scp data/processed/size_breaks_latest.csv                  <user>@<vm-hostname>:/home/site/wwwroot/data/processed/
+
+# Step 3 — pull latest code changes to VM (if any)
+ssh <user>@<vm-hostname> "cd /home/site/wwwroot && git pull && source venv/bin/activate && pip install -r requirements.txt"
+
+# Step 4 — restart the app
+ssh <user>@<vm-hostname> "supervisorctl restart streamlit"
+# OR via Azure CLI:
+az webapp restart --name <app-name> --resource-group <rg-name>
+```
+
+### Deploy code-only changes (no data refresh)
+
+```bash
+# Push to GitHub then pull on VM
+git push origin main
+ssh <user>@<vm-hostname> "cd /home/site/wwwroot && git pull && supervisorctl restart streamlit"
+```
+
+### File locations on VM
+
+| File | VM Path |
+|---|---|
+| App code | `/home/site/wwwroot/src/` |
+| Processed data | `/home/site/wwwroot/data/processed/` |
+| `.env` secrets | `/home/site/wwwroot/.env` |
+| Python venv | `/home/site/wwwroot/venv/` |
+| App logs | `/home/LogFiles/` (Azure Portal → Log stream) |
+
+### ODBC driver on VM (required for Fabric connection)
+
+```bash
+# Install Microsoft ODBC Driver 18 on Ubuntu
+curl https://packages.microsoft.com/keys/microsoft.asc | sudo apt-key add -
+curl https://packages.microsoft.com/config/ubuntu/22.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
+sudo apt-get update
+sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
+```
+
+---
+
+## 12. Key Business Rules
+
+
 
 - **Monday only:** All recommendations activate on Monday. Mid-week changes queue for the following Monday.
 - **Override requires reason:** Any deviation from solver recommendations must be logged — feeds Phase 1.5 improvement.
