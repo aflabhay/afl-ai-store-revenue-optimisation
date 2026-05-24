@@ -1,11 +1,18 @@
 """
 revenue_rate_builder.py
 -----------------------
-Computes rolling 4-week revenue rates per store × bucket (Category × Priceband).
-This is the primary input to the IP solver.
+LEGACY — not used by the main pipeline.
 
-Runs every Sunday night via a scheduled job (Azure Function or Fabric notebook).
-In local/dev mode, reads from dummy CSV files instead of Fabric.
+The main pipeline now uses fabric_connector.py which fetches style-level data
+from FACT_FNO_BASE_SOH (Opening_SOH, 446-day history) and aggregates in Python.
+
+Revenue rate formula (correct):
+    revenue_rate = bucket_revenue_4w / avg_weekly_soh
+    where avg_weekly_soh = SUM across styles of AVG(Opening_SOH over 28 days) * 7
+
+This file is kept for reference only. Do not use FACT_FNO_SOH_DAILY or
+LOAD_RUN_DATE — that table has only 1 day of data and closing SOH which is
+unreliable. Use FACT_FNO_BASE_SOH with Opening_SOH and INVENTORY_DATE instead.
 """
 
 import pandas as pd

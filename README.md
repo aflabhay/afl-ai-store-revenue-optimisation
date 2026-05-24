@@ -43,13 +43,16 @@ For each Arrow store, every Sunday night:
 ## 3. Revenue Rate Formula
 
 ```
-revenue_rate = bucket_revenue_4w / (avg_weekly_soh x 4)
+revenue_rate = bucket_revenue_4w / avg_weekly_soh
+
+sell_through_pct = units_sold_4w / (avg_weekly_soh + units_sold_4w) x 100
 ```
 
 - **Numerator**: Total revenue from this bucket over last 4 weeks (Rs)
-- **Denominator**: `avg_weekly_soh x 4` — average weekly SOH units scaled to a 4-week window (matches the numerator)
-- **Unit**: Rs per unit per 4-week period (dimensionally consistent)
-- SOH and sales are joined at STYLE_CODE level so both sides refer to the same styles
+- **`avg_weekly_soh`**: SUM across styles of `AVG(Opening_SOH over 28 days) x 7` — the average weekly committed inventory for the bucket over the same 4-week window
+- **Source**: `FACT_FNO_BASE_SOH` — Opening_SOH column, 446-day history, native INVENTORY_DATE
+- **SIZE aggregation**: `SUM(Opening_SOH)` across all sizes first to get style-level daily SOH, then `AVG` across days in the window, then `x 7` for weekly
+- SOH and sales joined at STYLE_CODE level — both sides reference the same styles
 
 ---
 
@@ -159,7 +162,7 @@ streamlit run src/streamlit_app/app.py
 | Table | Purpose |
 |---|---|
 | `[prd].[FACT_FNO_SALES_TC_ONLINE_BASE]` | Transaction-level sales — units, revenue, MRP, discount |
-| `[prd].[FACT_FNO_SOH_DAILY]` | Daily stock-on-hand snapshot per SKU per store |
+| `[prd].[FACT_FNO_BASE_SOH]` | Opening SOH per style x size x store x day (446-day history). Columns: STORE_CODE, STYLECODE, SIZE, INVENTORY_DATE (native DATE), Opening_SOH. Must SUM across sizes before averaging across days. |
 | `[prd].[DIM_SAP_STORE_MASTER]` | Store master — name, region, active Arrow stores |
 
 ---

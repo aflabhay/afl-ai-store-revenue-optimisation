@@ -109,9 +109,11 @@ def solve_store(
     bucket_keys  = buckets["bucket_key"].tolist()
     rates        = dict(zip(buckets["bucket_key"], buckets["revenue_rate"]))
 
-    # SOH availability: max style slots this bucket can physically fill.
-    # If style_count_in_bucket is provided, cap = floor(styles / capacity × 100).
-    # Falls back to display_capacity (no SOH constraint) when column is absent.
+    # C7 — SOH style cap: max style slots this bucket can physically fill.
+    # style_count_in_bucket = count of styles with Opening_SOH > 0 (from FACT_FNO_BASE_SOH).
+    # Only styles with actual stock can occupy display slots — zero-SOH styles excluded.
+    # cap_pct = style_count / display_capacity * 100, floored at 1%.
+    # Falls back to global max_share when column is absent (no SOH data).
     if "style_count_in_bucket" in buckets.columns:
         soh_style_cap_pct = {
             row.bucket_key: max(

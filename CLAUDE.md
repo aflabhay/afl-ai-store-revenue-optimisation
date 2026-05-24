@@ -100,10 +100,18 @@ cap[b]   = min(45%, proportional_fair_share[b] * cap_multiplier, soh_cap[b])  # 
 ### Revenue rate formula
 
 ```
-revenue_rate = bucket_revenue_4w / (avg_weekly_soh * 4)
+revenue_rate = bucket_revenue_4w / avg_weekly_soh
 ```
 
-Numerator: 4-week revenue. Denominator: avg_weekly_soh * 4 (same 4-week window). Unit: Rs/unit/4-week period.
+- `avg_weekly_soh` = SUM across styles of `AVG(Opening_SOH over 28 days) * 7` — the average weekly inventory committed to this bucket
+- Computed from `FACT_FNO_BASE_SOH` (Opening_SOH, 446-day history, INVENTORY_DATE native DATE)
+- Do NOT use `* 4` on the denominator — the `avg_weekly_soh` already captures the 4-week average
+
+### Sell-through formula
+
+```
+sell_through_pct = units_sold_4w / (avg_weekly_soh + units_sold_4w) * 100
+```
 
 ### Solver selection (ip_model.py)
 
@@ -140,7 +148,8 @@ else:
 - `PERCENTILE_CONT` requires `WITHIN GROUP (ORDER BY col) OVER (PARTITION BY ...)` — cannot be used as a plain GROUP BY aggregate
 - `COUNT(DISTINCT col)` cannot be used as a window function — must use GROUP BY separately and JOIN
 - Always use `f.QUALITY = 'Q1'` and `f.QUANTITY > 0` filters on sales fact table
-- SOH date parsing: `CONVERT(DATE, LEFT(CAST(s.LOAD_RUN_DATE AS VARCHAR), 8), 112)`
+- `FACT_FNO_BASE_SOH` has a SIZE column — always `SUM(Opening_SOH)` across sizes first to get style-level daily SOH, then `AVG` across days for the window average
+- Do NOT use `FACT_FNO_SOH_DAILY` — it has only 1 day of data and closing SOH. Always use `FACT_FNO_BASE_SOH` with `Opening_SOH` and `INVENTORY_DATE`
 
 ---
 
@@ -166,3 +175,7 @@ python-dotenv>=1.0.0
 - Do not use `--data dummy` argument (removed from run_solver.py)
 - Do not use `<<PRICEBAND_CASE>>` template injection (replaced with pandas approach)
 - Do not use `PERCENTILE_CONT` with plain `GROUP BY` in T-SQL (requires OVER clause)
+- Do not use `FACT_FNO_SOH_DAILY` — use `FACT_FNO_BASE_SOH` with `Opening_SOH` and `INVENTORY_DATE`
+- Do not reference `LOAD_RUN_DATE` or `SAP_STORE_ID` — old column names from the deprecated SOH table
+- Do not add `* 4` to the revenue_rate denominator — the formula is `bucket_revenue_4w / avg_weekly_soh`
+- Do not count zero-SOH styles in `style_count_in_bucket` — only count styles with `style_avg_daily_soh > 0`

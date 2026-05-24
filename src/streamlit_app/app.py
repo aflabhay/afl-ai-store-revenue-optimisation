@@ -1327,7 +1327,7 @@ elif page == "🔍 EDA Explorer":
             # KPI strip
             sk1, sk2, sk3, sk4 = st.columns(4)
             sk1.metric("Buckets with SOH", len(soh_data))
-            sk2.metric("Total SOH Units", f"{soh_data['total_soh_units'].sum():,.0f}")
+            sk2.metric("Total Weekly SOH", f"{soh_data['avg_weekly_soh'].sum():,.0f}")
             sk3.metric("Avg Weekly SOH / Bucket", f"{soh_data['avg_weekly_soh'].mean():,.0f}")
             zero_soh = (filt["avg_weekly_soh"].fillna(0) == 0).sum()
             sk4.metric("Buckets with Zero SOH", int(zero_soh))
@@ -1423,15 +1423,13 @@ elif page == "🔍 EDA Explorer":
             store_soh = (
                 soh_data.groupby(["store_id", "store_name"])
                 .agg(
-                    Buckets         = ("bucket_key",       "count"),
-                    Total_SOH       = ("total_soh_units",  "sum"),
-                    Avg_Weekly_SOH  = ("avg_weekly_soh",   "sum"),   # sum across buckets = store total
-                    Avg_Rate        = ("revenue_rate",     "mean"),
+                    Buckets        = ("bucket_key",       "count"),
+                    Avg_Weekly_SOH = ("avg_weekly_soh",   "sum"),   # sum across buckets = store total weekly SOH
+                    Avg_Rate       = ("revenue_rate",     "mean"),
                 )
                 .reset_index()
-                .sort_values("Total_SOH", ascending=False)
+                .sort_values("Avg_Weekly_SOH", ascending=False)
             )
-            store_soh["Total_SOH"]      = store_soh["Total_SOH"].map(lambda v: f"{v:,.0f}")
             store_soh["Avg_Weekly_SOH"] = store_soh["Avg_Weekly_SOH"].map(lambda v: f"{v:,.0f}")
             store_soh["Avg_Rate"]       = store_soh["Avg_Rate"].map(
                 lambda v: f"₹{v:,.0f}" if v == v else "–"
@@ -1441,8 +1439,7 @@ elif page == "🔍 EDA Explorer":
                     "store_id":       "Store ID",
                     "store_name":     "Store",
                     "Buckets":        "Buckets",
-                    "Total_SOH":      "Total SOH Units",
-                    "Avg_Weekly_SOH": "Weekly SOH (store total)",
+                    "Avg_Weekly_SOH": "Avg Weekly SOH (store total)",
                     "Avg_Rate":       "Avg Revenue Rate",
                 }),
                 use_container_width=True, hide_index=True,

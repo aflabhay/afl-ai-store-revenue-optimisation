@@ -8,9 +8,12 @@ Triggers next-day warehouse replenishment request.
 Runs daily (not just on Monday) — size breaks happen any day of the week.
 Independent of the weekly IP solver cycle.
 
-CORE styles (FASHION = 'CORE' in FACT_FNO_SOH_DAILY) are the pivotable
-sizes — the best-selling sizes in each category. If these sell out,
-customers leave empty-handed.
+CORE styles are the pivotable sizes — the best-selling sizes in each category.
+If these sell out, customers leave empty-handed.
+
+NOTE: When implementing the Fabric version of this job, use FACT_FNO_BASE_SOH
+(Opening_SOH, INVENTORY_DATE, STORE_CODE, STYLECODE, SIZE columns) instead of
+the legacy FACT_FNO_SOH_DAILY table which has only 1 day of data.
 """
 
 import pandas as pd
