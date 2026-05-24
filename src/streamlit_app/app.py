@@ -301,10 +301,8 @@ capacity_df       = load_store_capacity()
 rates_df          = load_revenue_rates()
 
 # Merge capacity for display — REGION is optional (may be absent in older capacity files)
-_cap_cols = [c for c in ["STORE_CODE", "STORE_NAME", "REGION", "MIN_OPTION_COUNT"] if c in capacity_df.columns]
+_cap_cols = [c for c in ["STORE_CODE", "STORE_NAME", "MIN_OPTION_COUNT"] if c in capacity_df.columns]
 recs_df = recs_df.merge(capacity_df[_cap_cols], left_on="store_id", right_on="STORE_CODE", how="left")
-if "REGION" not in recs_df.columns:
-    recs_df["REGION"] = "–"
 if "STORE_NAME" not in recs_df.columns:
     recs_df["STORE_NAME"] = recs_df["store_id"].astype(str)
 
@@ -414,7 +412,7 @@ if page == "🏪 Store Selector":
 
     # Summary table
     summary = (
-        recs_df.groupby(["store_id", "STORE_NAME", "REGION", "MIN_OPTION_COUNT"])
+        recs_df.groupby(["store_id", "STORE_NAME", "MIN_OPTION_COUNT"])
         .agg(
             buckets=("bucket_key", "count"),
             top_bucket=("display_share_pct", "max"),
@@ -436,8 +434,8 @@ if page == "🏪 Store Selector":
         unsafe_allow_html=True,
     )
     st.dataframe(
-        summary[["store_id", "STORE_NAME", "REGION", "MIN_OPTION_COUNT", "buckets", "top_bucket", "Health"]].rename(columns={
-            "store_id": "Store Code", "STORE_NAME": "Store", "REGION": "Region",
+        summary[["store_id", "STORE_NAME", "MIN_OPTION_COUNT", "buckets", "top_bucket", "Health"]].rename(columns={
+            "store_id": "Store Code", "STORE_NAME": "Store",
             "MIN_OPTION_COUNT": "Display Capacity", "buckets": "Active Buckets",
             "top_bucket": "Max Recommended Share %", "Health": "Solver Health",
         }),
@@ -898,24 +896,14 @@ elif page == "🔍 EDA Explorer":
         )
 
     # ── Filters ──────────────────────────────────────────────────────────
-    _has_region = "REGION" in eda_df.columns
-    fc1, fc2, fc3 = st.columns(3)
+    fc1, fc2 = st.columns(2)
     with fc1:
-        if _has_region:
-            all_regions = ["All"] + sorted(eda_df["REGION"].dropna().unique().tolist())
-            region_f = st.selectbox("Region", all_regions, key="eda_region")
-        else:
-            region_f = "All"
-            st.caption("Region not in dataset — re-run `fabric_connector.py`")
-    with fc2:
         all_cats = ["All"] + sorted(eda_df["category"].dropna().unique().tolist())
         cat_f = st.selectbox("Category", all_cats, key="eda_cat")
-    with fc3:
+    with fc2:
         price_f = st.selectbox("Priceband", ["All", "Economy", "Mid", "Premium"], key="eda_price")
 
     filt = eda_df.copy()
-    if _has_region and region_f != "All":
-        filt = filt[filt["REGION"] == region_f]
     if cat_f != "All":
         filt = filt[filt["category"] == cat_f]
     if price_f != "All":
@@ -942,10 +930,11 @@ elif page == "🔍 EDA Explorer":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📡 Fleet Overview",
         "📈 Revenue Rate",
         "🔄 Sell-Through & Discounts",
+        "📦 SOH Analysis",
         "🗂️ Data Quality",
     ])
 
@@ -1027,9 +1016,8 @@ elif page == "🔍 EDA Explorer":
 
         # Store-level summary table
         st.markdown("#### Store-Level Summary")
-        _grp_cols = ["store_id", "store_name"] + (["REGION"] if _has_region else [])
         store_sum = (
-            filt.groupby(_grp_cols)
+            filt.groupby(["store_id", "store_name"])
             .agg(
                 Buckets           = ("bucket_key",        "count"),
                 Revenue_4W        = ("bucket_revenue_4w", "sum"),
@@ -1043,18 +1031,16 @@ elif page == "🔍 EDA Explorer":
         store_sum["Avg_Revenue_Rate"] = store_sum["Avg_Revenue_Rate"].map(
             lambda v: f"₹{v:,.0f}" if v == v else "–"
         )
-        _col_rename = {
-            "store_id":         "Store ID",
-            "store_name":       "Store",
-            "REGION":           "Region",
-            "Buckets":          "Buckets",
-            "Revenue_4W":       "4W Revenue",
-            "Avg_Revenue_Rate": "Avg Rate",
-            "INCREASE_count":   "INCREASE",
-            "Solver_Readiness": "Readiness",
-        }
         st.dataframe(
-            store_sum.rename(columns=_col_rename),
+            store_sum.rename(columns={
+                "store_id":         "Store ID",
+                "store_name":       "Store",
+                "Buckets":          "Buckets",
+                "Revenue_4W":       "4W Revenue",
+                "Avg_Revenue_Rate": "Avg Rate",
+                "INCREASE_count":   "INCREASE",
+                "Solver_Readiness": "Readiness",
+            }),
             use_container_width=True,
             hide_index=True,
         )
@@ -1277,9 +1263,142 @@ elif page == "🔍 EDA Explorer":
             st.dataframe(dead_risk, use_container_width=True, hide_index=True)
 
     # ══════════════════════════════════════════════════════════════════════
-    # TAB 4 — DATA QUALITY
+    # TAB 4 — SOH ANALYSIS
     # ══════════════════════════════════════════════════════════════════════
     with tab4:
+        soh_data = filt[filt["avg_weekly_soh"].notna() & (filt["avg_weekly_soh"] > 0)].copy()
+
+        if soh_data.empty:
+            st.info("No SOH data available for the current filter selection.")
+        else:
+            # KPI strip
+            sk1, sk2, sk3, sk4 = st.columns(4)
+            sk1.metric("Buckets with SOH", len(soh_data))
+            sk2.metric("Total SOH Units", f"{soh_data['total_soh_units'].sum():,.0f}")
+            sk3.metric("Avg Weekly SOH / Bucket", f"{soh_data['avg_weekly_soh'].mean():,.0f}")
+            zero_soh = (filt["avg_weekly_soh"].fillna(0) == 0).sum()
+            sk4.metric("Buckets with Zero SOH", int(zero_soh))
+
+            st.markdown("---")
+            sc1, sc2 = st.columns(2)
+
+            # SOH distribution histogram
+            with sc1:
+                fig_soh_hist = px.histogram(
+                    soh_data, x="avg_weekly_soh", nbins=30,
+                    color_discrete_sequence=["#93c5fd"],
+                    labels={"avg_weekly_soh": "Avg Weekly SOH (units)"},
+                )
+                fig_soh_hist.update_layout(
+                    title=dict(text="Avg Weekly SOH Distribution", font=dict(size=13, color="#f8fafc")),
+                    height=300,
+                    xaxis=dict(title="Avg Weekly SOH", gridcolor="#334155"),
+                    yaxis=dict(title="Bucket Count",   gridcolor="#334155"),
+                    bargap=0.05,
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_soh_hist, use_container_width=True)
+
+            # SOH by category box
+            with sc2:
+                fig_soh_cat = px.box(
+                    soh_data, x="category", y="avg_weekly_soh",
+                    color="category",
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    labels={"avg_weekly_soh": "Avg Weekly SOH", "category": ""},
+                )
+                fig_soh_cat.update_layout(
+                    title=dict(text="SOH by Category", font=dict(size=13, color="#f8fafc")),
+                    showlegend=False,
+                    height=300,
+                    xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                    yaxis=dict(title="Avg Weekly SOH",  gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_soh_cat, use_container_width=True)
+
+            sc3, sc4 = st.columns(2)
+
+            # SOH by priceband
+            with sc3:
+                pb_order = ["Economy", "Mid", "Premium"]
+                fig_soh_pb = px.box(
+                    soh_data, x="priceband", y="avg_weekly_soh",
+                    color="priceband",
+                    category_orders={"priceband": pb_order},
+                    color_discrete_map=_PRICEBAND_COLORS,
+                    labels={"avg_weekly_soh": "Avg Weekly SOH", "priceband": ""},
+                )
+                fig_soh_pb.update_layout(
+                    title=dict(text="SOH by Priceband", font=dict(size=13, color="#f8fafc")),
+                    showlegend=False,
+                    height=300,
+                    xaxis=dict(title="", gridcolor="#334155"),
+                    yaxis=dict(title="Avg Weekly SOH", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_soh_pb, use_container_width=True)
+
+            # SOH vs Revenue Rate scatter
+            with sc4:
+                scatter_soh = soh_data[soh_data["revenue_rate"].notna()]
+                if not scatter_soh.empty:
+                    fig_soh_rate = px.scatter(
+                        scatter_soh,
+                        x="avg_weekly_soh", y="revenue_rate",
+                        color="signal_preview",
+                        color_discrete_map=_SIGNAL_COLORS,
+                        hover_data={"store_name": True, "bucket_key": True},
+                        labels={
+                            "avg_weekly_soh": "Avg Weekly SOH",
+                            "revenue_rate":   "Revenue Rate (₹/unit)",
+                            "signal_preview": "Signal",
+                        },
+                    )
+                    fig_soh_rate.update_layout(
+                        title=dict(text="SOH vs Revenue Rate", font=dict(size=13, color="#f8fafc")),
+                        height=300,
+                        xaxis=dict(title="Avg Weekly SOH", gridcolor="#334155"),
+                        yaxis=dict(title="Revenue Rate",   gridcolor="#334155"),
+                        **_CHART_LAYOUT,
+                    )
+                    fig_soh_rate.update_layout(legend={**_LEGEND, "title": "Signal"})
+                    st.plotly_chart(fig_soh_rate, use_container_width=True)
+
+            # Store-level SOH summary
+            st.markdown("#### SOH by Store")
+            store_soh = (
+                soh_data.groupby(["store_id", "store_name"])
+                .agg(
+                    Buckets         = ("bucket_key",       "count"),
+                    Total_SOH       = ("total_soh_units",  "sum"),
+                    Avg_Weekly_SOH  = ("avg_weekly_soh",   "sum"),   # sum across buckets = store total
+                    Avg_Rate        = ("revenue_rate",     "mean"),
+                )
+                .reset_index()
+                .sort_values("Total_SOH", ascending=False)
+            )
+            store_soh["Total_SOH"]      = store_soh["Total_SOH"].map(lambda v: f"{v:,.0f}")
+            store_soh["Avg_Weekly_SOH"] = store_soh["Avg_Weekly_SOH"].map(lambda v: f"{v:,.0f}")
+            store_soh["Avg_Rate"]       = store_soh["Avg_Rate"].map(
+                lambda v: f"₹{v:,.0f}" if v == v else "–"
+            )
+            st.dataframe(
+                store_soh.rename(columns={
+                    "store_id":       "Store ID",
+                    "store_name":     "Store",
+                    "Buckets":        "Buckets",
+                    "Total_SOH":      "Total SOH Units",
+                    "Avg_Weekly_SOH": "Weekly SOH (store total)",
+                    "Avg_Rate":       "Avg Revenue Rate",
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 5 — DATA QUALITY
+    # ══════════════════════════════════════════════════════════════════════
+    with tab5:
         dq1, dq2 = st.columns(2)
 
         with dq1:
@@ -1356,28 +1475,3 @@ elif page == "🔍 EDA Explorer":
                 "The solver seeds their revenue_rate from the category average across comparable stores."
             )
 
-        # SOH snapshot coverage per store
-        st.markdown("#### SOH Snapshot Coverage by Store")
-        soh_cov = (
-            filt[filt["soh_snapshot_days"].notna()]
-            .groupby("store_id")
-            .agg(
-                store_name        = ("store_name",        "first"),
-                avg_snapshot_days = ("soh_snapshot_days", "mean"),
-                min_snapshot_days = ("soh_snapshot_days", "min"),
-            )
-            .reset_index()
-        )
-        if not soh_cov.empty:
-            soh_cov["avg_snapshot_days"] = soh_cov["avg_snapshot_days"].round(1)
-            soh_cov["min_snapshot_days"] = soh_cov["min_snapshot_days"].astype(int)
-            st.dataframe(
-                soh_cov.rename(columns={
-                    "store_id":          "Store ID",
-                    "store_name":        "Store",
-                    "avg_snapshot_days": "Avg Snapshot Days",
-                    "min_snapshot_days": "Min Snapshot Days",
-                }),
-                use_container_width=True,
-                hide_index=True,
-            )
