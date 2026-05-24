@@ -351,7 +351,7 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**Navigation guide**")
 st.sidebar.markdown(
     "1. 🏪 **Store Selector** — choose region & store\n"
-    "2. 📊 **Allocation Table** — view IP recommendations\n"
+    "2. 📊 **Allocation Table** — IP recommendations with current & avg SOH\n"
     "3. 🔧 **What-If Simulation** — pin a bucket & re-solve\n"
     "4. 📤 **Export & Activate** — download Monday plan\n"
     "5. 🔍 **EDA Explorer** — fleet-wide data analysis\n\n"
@@ -369,7 +369,7 @@ Higher = more revenue per unit held.<br><br>
 <b style="color:#cbd5e1;">② Proportional Floor & Cap</b><br>
 Each bucket gets a floor <i>(min share)</i> and cap <i>(max share)</i> based on its rate relative to all buckets. Prevents one bucket dominating.<br><br>
 <b style="color:#cbd5e1;">③ SOH Cap (C7)</b><br>
-Share is capped so style slots never exceed available SOH styles in that bucket.<br><br>
+Share is capped so style slots never exceed available SOH styles. Allocation table shows <i>Current SOH (today)</i> — exact stock at latest snapshot — and <i>Avg Weekly SOH</i> — 4-week average used in the rate formula.<br><br>
 <b style="color:#cbd5e1;">④ IP Solver (PuLP / HiGHS)</b><br>
 Allocates remaining free budget to maximise revenue. Shares sum to 100%.<br><br>
 <b style="color:#cbd5e1;">Signals</b><br>

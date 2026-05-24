@@ -63,9 +63,13 @@ streamlit run src/streamlit_app/app.py
 **Pass 2 — EDA dataset:**
 - SQL: `_EDA_SQL` — outputs one row per **store x style x category** with `avg_unit_mrp`
 - NO priceband in SQL — classification done entirely in Python
+- CTEs in `_EDA_SQL`: `sales_style`, `soh_style`, `soh_sizes`, `latest_soh_date`, `current_soh_style`
+- `current_soh_style`: `SUM(Opening_SOH)` per store×style at `MAX(INVENTORY_DATE)` — today's exact stock snapshot
 - Python: `_apply_priceband()` classifies each style using breaks dict
 - Python: `_aggregate_to_buckets()` aggregates to store x category x priceband
 - All derived metrics (revenue_rate, sell_through_pct, signal_preview, etc.) computed in pandas
+- `current_soh_bucket = SUM(current_soh)` per bucket — shown in allocation table as "Current SOH (today)"
+- `avg_weekly_soh = SUM(style_avg_weekly_soh)` per bucket — used in revenue_rate denominator, shown as "Avg Weekly SOH"
 
 ### Why Python not SQL for pricebands
 

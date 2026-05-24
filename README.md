@@ -35,6 +35,8 @@ For each Arrow store, every Sunday night:
 | **avg_sizes_per_style** | Fleet-wide average distinct sizes per style for this category (e.g. SHIRT ≈ 5, TROUSER ≈ 5, SUIT ≈ 4). Computed at category level — sizes don't vary by priceband. |
 | **hanger_slots** | Physical hangers allocated to bucket = `display_share% × display_capacity`. `display_capacity` is hanger count, NOT style count. |
 | **style_slots (Rec. Style-Size Count)** | Distinct styles to arrange = `floor(hanger_slots / avg_sizes_per_style)`, capped at `style_count_in_bucket`. Always ≤ available SOH styles. |
+| **current_soh_bucket** | Today's exact SOH units for the bucket — `SUM(Opening_SOH)` at `MAX(INVENTORY_DATE)` across all styles and sizes. Shown as "Current SOH (today)" in the allocation table for real-time stock context. |
+| **avg_weekly_soh** | 4-week average weekly SOH for the bucket — used as the denominator in `revenue_rate`. Shown as "Avg Weekly SOH" in the allocation table. |
 | **Priceband** | Economy / Mid / Premium — thresholds computed per category from MRP p33/p67 percentiles, rounded to Rs 500 |
 | **Monday rearrangement** | Weekly physical display rearrangement based on solver recommendations |
 | **Phase 1** | IP optimisation using rolling 4-week revenue rates (current) |
@@ -177,7 +179,8 @@ streamlit run src/streamlit_app/app.py
 |---|---|---|
 | `mrp_distribution_YYYY-MM-DD.csv` | fabric_connector | MRP percentiles per category |
 | `priceband_config.json` | fabric_connector | Per-category break points for app display |
-| `eda_data_YYYY-MM-DD.csv` | fabric_connector | Main EDA dataset with revenue rates |
+| `eda_data_YYYY-MM-DD.csv` | fabric_connector | Main EDA dataset — includes `current_soh_bucket` (today's exact SOH) and `avg_weekly_soh` (4-week average) at bucket level |
+| `size_breaks_latest.csv` | fabric_connector | Size Break Monitor data — store×style size availability at latest snapshot |
 | `store_capacity_real.csv` | run_solver | Store Min Option Count (written after first solver run) |
 | `recommendations_YYYY-MM-DD.csv` | run_solver | Flat solver output per store-bucket |
 | `solver_results_YYYY-MM-DD.json` | run_solver | Full solver output with metadata |
