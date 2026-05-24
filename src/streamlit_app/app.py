@@ -626,8 +626,8 @@ elif page == "📊 Allocation Table":
         "hanger_slots":          "Rec. Hanger Spaces",
         "style_slots":           "Rec. Style-Size Count",
         "avg_sizes_per_style":   "Avg Sizes/Style",
-        "style_count_in_bucket": "Available Styles (SOH)",
-        "avg_weekly_soh":        "Avg Weekly SOH",
+        "style_count_in_bucket": "Available Styles",
+        "avg_weekly_soh":        "SOH (units)",
         "revenue_rate":          "Revenue Rate (₹/unit)",
         "expected_rev_index":    "Rev Index",
     }
@@ -653,7 +653,8 @@ elif page == "📊 Allocation Table":
     st.caption(
         "**Rec. Hanger Spaces** = Recommended % × display capacity (physical pegs allocated to bucket). "
         "**Rec. Style-Size Count** = Hanger Spaces ÷ Avg Sizes/Style (distinct styles to arrange on those pegs; each style occupies Avg Sizes/Style hangers). "
-        "**Rec. Style-Size Count ≤ Available Styles (SOH)** always — C7 ensures you never recommend more styles than stock."
+        "**Rec. Style-Size Count ≤ Available Styles** always — C7 ensures you never recommend more styles than stock. "
+        "**SOH (units)** = total stock units for the bucket summed across all styles and all sizes."
     )
 
     st.markdown(

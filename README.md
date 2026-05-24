@@ -331,7 +331,7 @@ nano .env
 Set this as the startup command in Azure Portal → App Service → Configuration → Startup Command:
 
 ```bash
-/home/site/wwwroot/venv/bin/streamlit run /home/site/wwwroot/src/streamlit_app/app.py --server.port 8000 --server.address 0.0.0.0 --server.headless true
+/home/site/wwwroot/venv/bin/streamlit run /home/site/wwwroot/src/streamlit_app/app.py --server.port 8503 --server.address 0.0.0.0 --server.headless true
 ```
 
 ### Weekly deployment workflow (every Sunday)

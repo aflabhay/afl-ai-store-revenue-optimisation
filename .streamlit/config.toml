@@ -1,3 +1,6 @@
+[server]
+port = 8503
+
 [theme]
 base            = "dark"
 primaryColor    = "#f59e0b"
