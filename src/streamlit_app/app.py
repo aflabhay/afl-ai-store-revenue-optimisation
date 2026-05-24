@@ -20,6 +20,9 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+import sys
+# Add project root to path so 'src.*' imports work when Streamlit runs this file
+sys.path.insert(0, str(Path(__file__).parents[2]))
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -279,7 +282,7 @@ def load_priceband_config():
 
 
 @st.cache_data(ttl=3600)
-def load_eda_data() -> tuple:
+def load_eda_data():
     """Load EDA dataset from data/processed/eda_data_YYYY-MM-DD.csv.
 
     To regenerate from the Fabric warehouse run:
@@ -545,6 +548,18 @@ elif page == "📊 Allocation Table":
     ).fillna("⚪")
     store_recs["Style Slots"] = (store_recs["display_share_pct"] / 100 * cap).round().astype(int)
 
+    # Merge current SOH from EDA data so planners can see Available Styles vs Recommended Slots
+    try:
+        _eda_alloc, _, _ = load_eda_data()
+        _store_eda = _eda_alloc[_eda_alloc["store_id"] == store_id][
+            ["bucket_key", "avg_weekly_soh", "style_count_in_bucket"]
+        ].copy()
+        store_recs = store_recs.merge(_store_eda, on="bucket_key", how="left")
+        store_recs["avg_weekly_soh"] = store_recs["avg_weekly_soh"].fillna(0)
+        store_recs["style_count_in_bucket"] = store_recs["style_count_in_bucket"].fillna(0).astype(int)
+    except Exception:
+        pass  # EDA file absent — SOH columns simply won't appear
+
     has_floor = "floor_share" in store_recs.columns
     if has_floor:
         store_recs["extra_share"] = (
@@ -580,19 +595,28 @@ elif page == "📊 Allocation Table":
     st.markdown("#### Full allocation detail")
     cols_to_show = [
         "signal_icon", "bucket_key", "floor_share", "display_share_pct",
-        "revenue_rate", "Style Slots", "expected_rev_index",
+        "Style Slots", "style_count_in_bucket", "avg_weekly_soh",
+        "revenue_rate", "expected_rev_index",
     ]
     col_rename = {
-        "signal_icon":        "",
-        "bucket_key":         "Bucket",
-        "floor_share":        "Floor %",
-        "display_share_pct":  "Recommended %",
-        "revenue_rate":       "Revenue Rate (₹/unit)",
-        "expected_rev_index": "Rev Index",
+        "signal_icon":           "",
+        "bucket_key":            "Bucket",
+        "floor_share":           "Floor %",
+        "display_share_pct":     "Recommended %",
+        "Style Slots":           "Rec. Style Slots",
+        "style_count_in_bucket": "Available Styles (SOH)",
+        "avg_weekly_soh":        "Avg Weekly SOH",
+        "revenue_rate":          "Revenue Rate (₹/unit)",
+        "expected_rev_index":    "Rev Index",
     }
     if not has_floor:
         cols_to_show = [c for c in cols_to_show if c != "floor_share"]
         col_rename.pop("floor_share", None)
+    # Only include SOH columns if they were successfully merged
+    for _soh_col in ["style_count_in_bucket", "avg_weekly_soh"]:
+        if _soh_col not in store_recs.columns:
+            cols_to_show = [c for c in cols_to_show if c != _soh_col]
+            col_rename.pop(_soh_col, None)
 
     st.dataframe(
         store_recs[cols_to_show].rename(columns=col_rename),
@@ -605,6 +629,14 @@ elif page == "📊 Allocation Table":
         f"**Total share:** {store_recs['display_share_pct'].sum()}%",
         unsafe_allow_html=True,
     )
+    if "style_count_in_bucket" in store_recs.columns:
+        soh_ok = (store_recs["Style Slots"] <= store_recs["style_count_in_bucket"]).all()
+        if not soh_ok:
+            st.warning(
+                "One or more buckets have fewer available styles in SOH than the recommended slot count. "
+                "The solver's C7 constraint caps recommendations at SOH availability — "
+                "this mismatch may indicate SOH data was refreshed after the solver ran. Re-run the solver."
+            )
 
     if has_floor:
         # ── Stacked bar visual per bucket ─────────────────────────────────
