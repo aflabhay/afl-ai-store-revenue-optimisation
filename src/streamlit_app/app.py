@@ -282,6 +282,21 @@ def load_priceband_config():
 
 
 @st.cache_data(ttl=3600)
+def load_size_breaks():
+    """
+    Load size break monitor data from data/processed/size_breaks_latest.csv.
+    Returns DataFrame or None if file not found.
+    Run: python -c "from src.data_pipeline.fabric_connector import fetch_size_breaks; ..."
+    to regenerate.
+    """
+    processed = DATA_DIR / "processed"
+    files = sorted(processed.glob("size_breaks_*.csv"), reverse=True)
+    if files:
+        return pd.read_csv(files[0])
+    return None
+
+
+@st.cache_data(ttl=3600)
 def load_eda_data():
     """Load EDA dataset from data/processed/eda_data_YYYY-MM-DD.csv.
 
@@ -982,13 +997,14 @@ elif page == "🔍 EDA Explorer":
     st.markdown("---")
 
     # ── Tabs ──────────────────────────────────────────────────────────────
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "📡 Fleet Overview",
         "📈 Revenue Rate",
         "🔄 Sell-Through & Discounts",
         "📦 SOH Analysis",
         "🗂️ Data Quality",
         "💰 Price Bands",
+        "🧦 Size Break Monitor",
     ])
 
     # ══════════════════════════════════════════════════════════════════════
@@ -1683,5 +1699,149 @@ elif page == "🔍 EDA Explorer":
             st.warning(
                 "MRP distribution file not found. "
                 "Run `python src/data_pipeline/fabric_connector.py` to generate it."
+            )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 7 — SIZE BREAK MONITOR
+    # ══════════════════════════════════════════════════════════════════════
+    with tab7:
+        sb_df = load_size_breaks()
+
+        if sb_df is None:
+            st.info(
+                "Size break data not yet generated. Run:\n\n"
+                "```python\n"
+                "from src.data_pipeline.fabric_connector import fetch_size_breaks\n"
+                "import pandas as pd\n"
+                "df = fetch_size_breaks()\n"
+                "df.to_csv('data/processed/size_breaks_latest.csv', index=False)\n"
+                "```"
+            )
+        else:
+            snap_date = sb_df["snap_date"].iloc[0] if "snap_date" in sb_df.columns else "latest"
+            st.caption(f"SOH snapshot date: **{snap_date}** &nbsp;·&nbsp; {len(sb_df):,} store-style combinations")
+
+            # ── KPI strip ─────────────────────────────────────────────────
+            sb1, sb2, sb3, sb4, sb5 = st.columns(5)
+            sb1.metric("Total Styles", f"{sb_df['style_code'].nunique():,}")
+            broken = (sb_df["size_break_status"] == "BROKEN").sum()
+            at_risk = (sb_df["size_break_status"] == "AT RISK").sum()
+            pivotable = (sb_df["pivotability"] == "PIVOTABLE").sum()
+            replenish_now = (sb_df["replenishment_urgency"] == "REPLENISH NOW").sum()
+            sb2.metric("Broken Styles", f"{broken:,}", delta=f"-{broken} styles", delta_color="inverse")
+            sb3.metric("At Risk", f"{at_risk:,}", delta=f"-{at_risk} styles", delta_color="inverse")
+            sb4.metric("Pivotable", f"{pivotable:,}")
+            sb5.metric("Replenish Now", f"{replenish_now:,}", delta_color="inverse")
+
+            st.markdown("---")
+
+            # ── Store filter ──────────────────────────────────────────────
+            sb_stores = ["All"] + sorted(sb_df["store_name"].dropna().unique().tolist())
+            sb_store_f = st.selectbox("Filter by Store", sb_stores, key="sb_store_f")
+            sb_filt = sb_df if sb_store_f == "All" else sb_df[sb_df["store_name"] == sb_store_f]
+
+            # ── Status distribution bar chart ─────────────────────────────
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                status_order = ["BROKEN", "AT RISK", "INCOMPLETE RUN", "HEALTHY"]
+                status_colors = {"BROKEN": "#f87171", "AT RISK": "#f59e0b", "INCOMPLETE RUN": "#93c5fd", "HEALTHY": "#34d399"}
+                status_counts = (
+                    sb_filt["size_break_status"].value_counts()
+                    .reindex(status_order, fill_value=0)
+                    .reset_index()
+                )
+                status_counts.columns = ["Status", "Count"]
+                fig_status = px.bar(
+                    status_counts, x="Status", y="Count",
+                    color="Status",
+                    color_discrete_map=status_colors,
+                )
+                fig_status.update_layout(
+                    title=dict(text="Size Break Status Distribution", font=dict(size=13, color="#f8fafc")),
+                    height=320, showlegend=False,
+                    xaxis=dict(title="", gridcolor="#334155"),
+                    yaxis=dict(title="Style Count", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_status, use_container_width=True)
+
+            with sc2:
+                pivot_order = ["PIVOTABLE", "MARGINAL", "NOT PIVOTABLE"]
+                pivot_colors = {"PIVOTABLE": "#34d399", "MARGINAL": "#f59e0b", "NOT PIVOTABLE": "#f87171"}
+                pivot_counts = (
+                    sb_filt["pivotability"].value_counts()
+                    .reindex(pivot_order, fill_value=0)
+                    .reset_index()
+                )
+                pivot_counts.columns = ["Pivotability", "Count"]
+                fig_pivot = px.bar(
+                    pivot_counts, x="Pivotability", y="Count",
+                    color="Pivotability",
+                    color_discrete_map=pivot_colors,
+                )
+                fig_pivot.update_layout(
+                    title=dict(text="Pivotability of Styles", font=dict(size=13, color="#f8fafc")),
+                    height=320, showlegend=False,
+                    xaxis=dict(title="", gridcolor="#334155"),
+                    yaxis=dict(title="Style Count", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_pivot, use_container_width=True)
+
+            # ── Replenishment urgency by store ────────────────────────────
+            st.markdown("#### Replenishment Summary by Store")
+            store_urgency = (
+                sb_filt.groupby(["store_id", "store_name", "replenishment_urgency"])
+                .size()
+                .reset_index(name="styles")
+                .pivot_table(index=["store_id", "store_name"], columns="replenishment_urgency", values="styles", fill_value=0)
+                .reset_index()
+            )
+            for col in ["REPLENISH NOW", "REPLENISH SOON", "MONITOR", "OK"]:
+                if col not in store_urgency.columns:
+                    store_urgency[col] = 0
+            store_urgency = store_urgency.sort_values("REPLENISH NOW", ascending=False)
+            st.dataframe(
+                store_urgency.rename(columns={"store_id": "Store ID", "store_name": "Store"}),
+                use_container_width=True, hide_index=True,
+            )
+
+            # ── Broken / at-risk detail table ─────────────────────────────
+            st.markdown("#### Broken & At-Risk Styles (action required)")
+            urgent = sb_filt[sb_filt["size_break_status"].isin(["BROKEN", "AT RISK"])].copy()
+            if urgent.empty:
+                st.success("No broken or at-risk styles in the selected store(s).")
+            else:
+                display_cols = [
+                    "store_id", "store_name", "style_code", "size_group",
+                    "sizes_present", "expected_size_count", "missing_sizes",
+                    "zero_soh_sizes", "thin_sizes", "zero_size_list", "thin_size_list",
+                    "total_soh", "size_break_status", "pivotability", "replenishment_urgency",
+                ]
+                display_cols = [c for c in display_cols if c in urgent.columns]
+                st.dataframe(
+                    urgent[display_cols].rename(columns={
+                        "store_id":           "Store ID",
+                        "store_name":         "Store",
+                        "style_code":         "Style",
+                        "size_group":         "Size Group",
+                        "sizes_present":      "Sizes Present",
+                        "expected_size_count":"Expected Sizes",
+                        "missing_sizes":      "Missing",
+                        "zero_soh_sizes":     "Zero SOH",
+                        "thin_sizes":         "Thin (≤2)",
+                        "zero_size_list":     "Broken Sizes",
+                        "thin_size_list":     "Thin Sizes",
+                        "total_soh":          "Total SOH",
+                        "size_break_status":  "Status",
+                        "pivotability":       "Pivotable?",
+                        "replenishment_urgency": "Urgency",
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+
+            st.caption(
+                "Refresh: run `python -c \"from src.data_pipeline.fabric_connector import fetch_size_breaks; "
+                "import pandas as pd; df=fetch_size_breaks(); df.to_csv('data/processed/size_breaks_latest.csv', index=False)\"`"
             )
 

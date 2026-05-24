@@ -105,17 +105,18 @@ soh_style AS (
         COUNT(DISTINCT s.INVENTORY_DATE)                AS style_soh_days
     FROM (
         -- Collapse sizes to style level per day first
+        -- Qualify STORE_CODE with alias b to avoid ambiguity with active_arrow_stores
         SELECT
-            STORE_CODE,
-            STYLECODE,
-            INVENTORY_DATE,
-            SUM(Opening_SOH)    AS daily_soh
-        FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH]
-        INNER JOIN active_arrow_stores st ON STORE_CODE = st.STORE_CODE
+            b.STORE_CODE,
+            b.STYLECODE,
+            b.INVENTORY_DATE,
+            SUM(b.Opening_SOH)  AS daily_soh
+        FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH] b
+        INNER JOIN active_arrow_stores st ON b.STORE_CODE = st.STORE_CODE
         CROSS JOIN date_bounds d
-        WHERE INVENTORY_DATE >= d.window_start
-          AND INVENTORY_DATE <= d.window_end
-        GROUP BY STORE_CODE, STYLECODE, INVENTORY_DATE
+        WHERE b.INVENTORY_DATE >= d.window_start
+          AND b.INVENTORY_DATE <= d.window_end
+        GROUP BY b.STORE_CODE, b.STYLECODE, b.INVENTORY_DATE
     ) s
     GROUP BY s.STORE_CODE, s.STYLECODE
 )
@@ -147,6 +148,195 @@ LEFT JOIN soh_style so
 CROSS JOIN date_bounds d
 ORDER BY sl.store_id, sl.category, sl.style_code;
 """
+# ── Size break monitor SQL ───────────────────────────────────────────────────
+# Fetches current size availability per store × style.
+# Used in the Size Break Monitor EDA tab in the Streamlit app.
+# Runs against FACT_FNO_BASE_SOH latest snapshot date.
+_SIZE_BREAK_SQL = """
+WITH latest_date AS (
+    SELECT MAX(INVENTORY_DATE) AS snap_date
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH]
+),
+active_arrow_stores AS (
+    SELECT STORE_CODE, NAME_2 AS store_name
+    FROM [Arvind_Analytics_Warehouse].[prd].[DIM_SAP_STORE_MASTER]
+    WHERE ARROW != 0 AND STATUS = 'ACTIVE'
+),
+size_groups AS (
+    SELECT SIZE, size_group FROM (VALUES
+        ('S',   'ALPHA'),  ('M',  'ALPHA'), ('L',  'ALPHA'),
+        ('XL',  'ALPHA'),  ('XXL','ALPHA'), ('3XL','ALPHA'),
+        ('28',  'NUMERIC'),('30', 'NUMERIC'),('32', 'NUMERIC'),
+        ('34',  'NUMERIC'),('36', 'NUMERIC'),('38', 'NUMERIC'),
+        ('39',  'NUMERIC'),('40', 'NUMERIC'),('42', 'NUMERIC'),
+        ('44',  'NUMERIC'),('46', 'NUMERIC'),('48', 'NUMERIC'),
+        ('OP',  'SINGLE'), ('OS', 'SINGLE')
+    ) AS t(SIZE, size_group)
+),
+current_soh AS (
+    SELECT
+        s.STORE_CODE,
+        st.store_name,
+        s.STYLECODE,
+        s.SIZE,
+        s.Opening_SOH,
+        sg.size_group
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH] s
+    INNER JOIN active_arrow_stores st ON s.STORE_CODE = st.STORE_CODE
+    INNER JOIN latest_date ld         ON s.INVENTORY_DATE = ld.snap_date
+    LEFT  JOIN size_groups sg         ON s.SIZE = sg.SIZE
+    WHERE s.SIZE NOT IN ('85','95','105','10','9','7','6','8','1','100','4XL','5XL','6XL')
+),
+style_summary AS (
+    SELECT
+        STORE_CODE,
+        store_name,
+        STYLECODE,
+        size_group,
+        COUNT(DISTINCT SIZE)                                                        AS sizes_present,
+        SUM(Opening_SOH)                                                            AS total_soh,
+        AVG(CAST(Opening_SOH AS FLOAT))                                             AS avg_soh_per_size,
+        MIN(Opening_SOH)                                                            AS min_size_soh,
+        MAX(Opening_SOH)                                                            AS max_size_soh,
+        SUM(CASE WHEN Opening_SOH = 0  THEN 1 ELSE 0 END)                          AS zero_soh_sizes,
+        SUM(CASE WHEN Opening_SOH <= 2 THEN 1 ELSE 0 END)                          AS thin_sizes,
+        SUM(CASE WHEN Opening_SOH >= 3 THEN 1 ELSE 0 END)                          AS healthy_sizes,
+        STRING_AGG(
+            CASE WHEN Opening_SOH <= 2
+                 THEN SIZE + '(' + CAST(CAST(Opening_SOH AS INT) AS VARCHAR) + ')'
+            END, ', ')                                                               AS thin_size_list,
+        STRING_AGG(
+            CASE WHEN Opening_SOH = 0 THEN SIZE END, ', ')                         AS zero_size_list
+    FROM current_soh
+    GROUP BY STORE_CODE, store_name, STYLECODE, size_group
+),
+expected_sizes AS (
+    SELECT 'ALPHA'   AS size_group, 6  AS expected_size_count
+    UNION ALL
+    SELECT 'NUMERIC' AS size_group, 10 AS expected_size_count
+    UNION ALL
+    SELECT 'SINGLE'  AS size_group, 1  AS expected_size_count
+)
+SELECT
+    ss.STORE_CODE                                           AS store_id,
+    ss.store_name,
+    ss.STYLECODE                                            AS style_code,
+    ss.size_group,
+    ss.sizes_present,
+    es.expected_size_count,
+    ss.total_soh,
+    ss.avg_soh_per_size,
+    ss.min_size_soh,
+    ss.max_size_soh,
+    ss.zero_soh_sizes,
+    ss.thin_sizes,
+    ss.healthy_sizes,
+    ss.thin_size_list,
+    ss.zero_size_list,
+    es.expected_size_count - ss.sizes_present               AS missing_sizes,
+    CASE
+        WHEN ss.zero_soh_sizes  > 0                         THEN 'BROKEN'
+        WHEN ss.thin_sizes      > 0                         THEN 'AT RISK'
+        WHEN ss.sizes_present   < es.expected_size_count    THEN 'INCOMPLETE RUN'
+        ELSE                                                     'HEALTHY'
+    END                                                     AS size_break_status,
+    CASE
+        WHEN ss.size_group = 'ALPHA'   AND ss.healthy_sizes >= 3 AND ss.zero_soh_sizes = 0 THEN 'PIVOTABLE'
+        WHEN ss.size_group = 'NUMERIC' AND ss.healthy_sizes >= 4 AND ss.zero_soh_sizes = 0 THEN 'PIVOTABLE'
+        WHEN ss.zero_soh_sizes > 2 OR ss.total_soh <= 3    THEN 'NOT PIVOTABLE'
+        ELSE                                                     'MARGINAL'
+    END                                                     AS pivotability,
+    CASE
+        WHEN ss.zero_soh_sizes  > 0 AND ss.size_group != 'SINGLE' THEN 'REPLENISH NOW'
+        WHEN ss.thin_sizes      > 2                                THEN 'REPLENISH SOON'
+        WHEN ss.thin_sizes      > 0                                THEN 'MONITOR'
+        ELSE                                                            'OK'
+    END                                                     AS replenishment_urgency,
+    ld.snap_date
+FROM style_summary ss
+INNER JOIN latest_date ld    ON 1 = 1
+LEFT  JOIN expected_sizes es ON es.size_group = ss.size_group
+ORDER BY
+    CASE WHEN ss.zero_soh_sizes > 0 THEN 1 WHEN ss.thin_sizes > 0 THEN 2 ELSE 3 END,
+    ss.STORE_CODE, ss.STYLECODE;
+"""
+
+
+# ── MRP percentile discovery SQL ─────────────────────────────────────────────
+# SQL Server: PERCENTILE_CONT requires OVER (PARTITION BY ...) — cannot be
+# used as a plain GROUP BY aggregate. Split into:
+#   raw         — filtered rows (category, stylecode, unitmrp)
+#   percentiles — window-function percentiles per category, SELECT DISTINCT
+#   counts      — COUNT DISTINCT / MIN / MAX via GROUP BY
+# then JOIN counts and percentiles on category.
+_MRP_DIST_SQL = """
+WITH date_bounds AS (
+    SELECT
+        CONVERT(DATE, DATEADD(WEEK, -4, GETDATE())) AS window_start,
+        CONVERT(DATE, GETDATE())                     AS window_end
+),
+active_arrow_stores AS (
+    SELECT STORE_CODE
+    FROM [Arvind_Analytics_Warehouse].[prd].[DIM_SAP_STORE_MASTER]
+    WHERE ARROW != 0 AND STATUS = 'ACTIVE'
+),
+raw AS (
+    SELECT
+        UPPER(LTRIM(RTRIM(f.CATEGORY))) AS category,
+        f.STYLECODE,
+        f.UNITMRP
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_SALES_TC_ONLINE_BASE] f
+    INNER JOIN active_arrow_stores st ON f.SAP_STORECODE = st.STORE_CODE
+    CROSS JOIN date_bounds d
+    WHERE f.BRAND       = 'ARROW'
+      AND f.INVOICETYPE = 'SALES'
+      AND UPPER(LTRIM(RTRIM(f.CATEGORY))) NOT IN (
+            'PROMO', 'SAMPLES', 'SCRAP', 'TRIMS', 'CARRY BAG'
+      )
+      AND CONVERT(DATE, f.INVOICE_DATE) >= d.window_start
+      AND CONVERT(DATE, f.INVOICE_DATE) <  d.window_end
+),
+percentiles AS (
+    SELECT DISTINCT
+        category,
+        PERCENTILE_CONT(0.10) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p10,
+        PERCENTILE_CONT(0.25) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p25,
+        PERCENTILE_CONT(0.33) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p33,
+        PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p50,
+        PERCENTILE_CONT(0.67) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p67,
+        PERCENTILE_CONT(0.75) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p75,
+        PERCENTILE_CONT(0.90) WITHIN GROUP (ORDER BY UNITMRP) OVER (PARTITION BY category) AS p90
+    FROM raw
+),
+counts AS (
+    SELECT
+        category,
+        COUNT(DISTINCT STYLECODE) AS style_count,
+        COUNT(*)                  AS transaction_rows,
+        MIN(UNITMRP)              AS min_mrp,
+        MAX(UNITMRP)              AS max_mrp
+    FROM raw
+    GROUP BY category
+)
+SELECT
+    c.category,
+    c.style_count,
+    c.transaction_rows,
+    c.min_mrp,
+    c.max_mrp,
+    p.p10,
+    p.p25,
+    p.p33,
+    p.p50,
+    p.p67,
+    p.p75,
+    p.p90
+FROM counts c
+INNER JOIN percentiles p ON p.category = c.category
+ORDER BY c.style_count DESC;
+"""
+
+
 # ── Priceband computation ─────────────────────────────────────────────────────
 
 def compute_priceband_breaks(mrp_dist_df: pd.DataFrame) -> dict:
@@ -346,6 +536,22 @@ def connect() -> pyodbc.Connection:
 
 # ── Public fetch functions ────────────────────────────────────────────────────
 
+def fetch_size_breaks() -> pd.DataFrame:
+    """
+    Fetch size break monitor data from the latest SOH snapshot.
+    Returns one row per store × style with size availability metrics,
+    size_break_status, pivotability, and replenishment_urgency.
+    """
+    conn = connect()
+    try:
+        print("Fetching size break monitor data...")
+        df = pd.read_sql(_SIZE_BREAK_SQL, conn)
+        print(f"  {len(df):,} store-style rows fetched.")
+        return df
+    finally:
+        conn.close()
+
+
 def fetch_mrp_distribution() -> pd.DataFrame:
     """
     Fetch MRP percentile distribution per category from the Fabric warehouse.
@@ -493,4 +699,16 @@ if __name__ == "__main__":
     valid_rate = df["revenue_rate"].notna().sum()
     print(f"Valid rate : {valid_rate:,} / {len(df):,} buckets")
     print(f"Saved      : {out_path}")
+
+    # ── Step 3: Size break monitor ────────────────────────────────────────
+    print(f"\nStep 3/3  Size break monitor (latest SOH snapshot)...")
+    sb_df = fetch_size_breaks()
+    sb_path = out_dir / "size_breaks_latest.csv"
+    sb_df.to_csv(sb_path, index=False)
+    broken = (sb_df["size_break_status"] == "BROKEN").sum()
+    at_risk = (sb_df["size_break_status"] == "AT RISK").sum()
+    replenish_now = (sb_df["replenishment_urgency"] == "REPLENISH NOW").sum()
+    print(f"  Styles: {len(sb_df):,} | Broken: {broken} | At Risk: {at_risk} | Replenish Now: {replenish_now}")
+    print(f"  Saved: {sb_path.name}")
+
     print("\nRun solver next: python src/solver/run_solver.py --store all")
