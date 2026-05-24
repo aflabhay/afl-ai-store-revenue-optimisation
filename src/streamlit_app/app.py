@@ -369,7 +369,7 @@ Higher = more revenue per unit held.<br><br>
 <b style="color:#cbd5e1;">② Proportional Floor & Cap</b><br>
 Each bucket gets a floor <i>(min share)</i> and cap <i>(max share)</i> based on its rate relative to all buckets. Prevents one bucket dominating.<br><br>
 <b style="color:#cbd5e1;">③ SOH Cap (C7)</b><br>
-Share is capped so style slots never exceed available SOH styles. Allocation table shows <i>Current SOH (today)</i> — exact stock at latest snapshot — and <i>Avg Weekly SOH</i> — 4-week average used in the rate formula.<br><br>
+Share is capped so <i>Rec. Style Count</i> never exceeds available SOH styles. Allocation table shows <i>Rec. Display Units</i> (physical hangers), <i>Rec. Style Count</i> (distinct styles), <i>Current SOH (today)</i> and <i>Avg Weekly SOH</i>.<br><br>
 <b style="color:#cbd5e1;">④ IP Solver (PuLP / HiGHS)</b><br>
 Allocates remaining free budget to maximise revenue. Shares sum to 100%.<br><br>
 <b style="color:#cbd5e1;">Signals</b><br>
@@ -627,8 +627,8 @@ elif page == "📊 Allocation Table":
         "bucket_key":            "Bucket",
         "floor_share":           "Floor %",
         "display_share_pct":     "Recommended %",
-        "hanger_slots":          "Rec. Hanger Spaces",
-        "style_slots":           "Rec. Style-Size Count",
+        "hanger_slots":          "Rec. Display Units",
+        "style_slots":           "Rec. Style Count",
         "avg_sizes_per_style":   "Avg Sizes/Style",
         "style_count_in_bucket": "Available Styles",
         "current_soh_bucket":    "Current SOH (today)",
@@ -656,16 +656,16 @@ elif page == "📊 Allocation Table":
     )
 
     st.caption(
-        "**Rec. Hanger Spaces** = Recommended % × display capacity (physical pegs allocated to bucket). "
-        "**Rec. Style-Size Count** = Hanger Spaces ÷ Avg Sizes/Style (distinct styles to arrange on those pegs; each style occupies Avg Sizes/Style hangers). "
-        "**Rec. Style-Size Count ≤ Available Styles** always — C7 ensures you never recommend more styles than stock. "
+        "**Rec. Display Units** = Recommended % × display capacity (physical hanger pegs allocated to bucket). "
+        "**Rec. Style Count** = Display Units ÷ Avg Sizes/Style (distinct styles to arrange; each style occupies Avg Sizes/Style hangers). "
+        "**Rec. Style Count ≤ Available Styles** always — C7 ensures you never recommend more styles than stock. "
         "**Current SOH (today)** = exact stock units in this bucket as of the latest inventory snapshot. "
         "**Avg Weekly SOH** = average weekly stock over the past 4 weeks (used for revenue rate calculation)."
     )
 
     st.markdown(
-        f"**Hanger spaces used:** {store_recs['hanger_slots'].sum()} / {cap} &nbsp;|&nbsp; "
-        f"**Style-size count total:** {store_recs['style_slots'].sum()} &nbsp;|&nbsp; "
+        f"**Display units used:** {store_recs['hanger_slots'].sum()} / {cap} &nbsp;|&nbsp; "
+        f"**Rec. style count total:** {store_recs['style_slots'].sum()} &nbsp;|&nbsp; "
         f"**Total share:** {store_recs['display_share_pct'].sum()}%",
         unsafe_allow_html=True,
     )
