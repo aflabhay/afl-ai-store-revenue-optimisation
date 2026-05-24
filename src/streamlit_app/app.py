@@ -260,7 +260,7 @@ _READINESS_COLORS = {
 
 
 @st.cache_data(ttl=3600)
-def load_priceband_config() -> tuple[dict, pd.DataFrame | None]:
+def load_priceband_config():
     """
     Load priceband_config.json and latest mrp_distribution_*.csv from data/processed/.
     Returns (breaks_dict, mrp_df_or_None).
