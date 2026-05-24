@@ -1,5 +1,6 @@
 # Core solver
 pulp>=2.7.0
+highspy>=1.5.0        # HiGHS solver — arm64-native (Mac M1/M2); fallback to CBC on x86_64
 
 # Data processing
 pandas>=2.0.0
@@ -8,9 +9,11 @@ openpyxl>=3.1.0
 
 # Streamlit app
 streamlit>=1.32.0
+plotly>=5.18.0
 
-# Database (Fabric connection — not needed for dummy data mode)
-# pyodbc>=5.0.0
+# Database (Fabric connection)
+pyodbc>=5.0.0
+azure-identity>=1.15.0
 
 # Notebooks
 jupyter>=1.0.0

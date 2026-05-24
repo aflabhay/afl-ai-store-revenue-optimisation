@@ -16,6 +16,8 @@ Run locally:
 
 import streamlit as st
 import pandas as pd
+import plotly.express as px
+import plotly.graph_objects as go
 from pathlib import Path
 
 # ── Page config ──────────────────────────────────────────────────────────────
@@ -204,13 +206,17 @@ def load_recommendations():
     processed = DATA_DIR / "processed"
     files = sorted(processed.glob("recommendations_*.csv"), reverse=True)
     if not files:
-        st.error("No recommendation files found. Run the solver first: python src/solver/run_solver.py --data dummy")
+        st.error("No recommendation files found. Run the solver first: python src/solver/run_solver.py")
         st.stop()
     return pd.read_csv(files[0]), files[0].stem.replace("recommendations_", "")
 
 @st.cache_data(ttl=0)
 def load_store_capacity():
-    return pd.read_csv(DATA_DIR / "raw" / "store_capacity.csv")
+    real = DATA_DIR / "processed" / "store_capacity_real.csv"
+    if not real.exists():
+        st.error("Store capacity file not found. Run: python src/solver/run_solver.py")
+        st.stop()
+    return pd.read_csv(real)
 
 @st.cache_data(ttl=0)
 def load_revenue_rates():
@@ -223,8 +229,50 @@ def load_revenue_rates():
     if rec_files:
         recs = pd.read_csv(rec_files[0])
         return recs[["store_id", "bucket_key", "revenue_rate"]].drop_duplicates()
-    st.error("No data files found. Run: PYTHONPATH=. python src/solver/run_solver.py --data dummy --store all")
+    st.error("No data files found. Run: PYTHONPATH=. python src/solver/run_solver.py --store all")
     st.stop()
+
+
+# ── EDA chart theme constants ─────────────────────────────────────────────────
+_CHART_LAYOUT = dict(
+    paper_bgcolor="#1e293b",
+    plot_bgcolor="#0f172a",
+    font=dict(color="#e2e8f0", family="Inter, sans-serif", size=12),
+    margin=dict(l=10, r=10, t=44, b=10),
+)
+# Use this separately in charts that need a visible legend to avoid kwarg conflicts
+_LEGEND = dict(bgcolor="#1e293b", bordercolor="#334155", borderwidth=1)
+_SIGNAL_COLORS = {
+    "INCREASE": "#34d399",
+    "HOLD":     "#f59e0b",
+    "REDUCE":   "#f87171",
+    "NO SOH":   "#64748b",
+    "NO SALES": "#94a3b8",
+}
+_PRICEBAND_COLORS = {"Economy": "#93c5fd", "Mid": "#f59e0b", "Premium": "#34d399"}
+_READINESS_COLORS = {
+    "IDEAL":            "#34d399",
+    "GOOD":             "#f59e0b",
+    "LIMITED":          "#f97316",
+    "COARSEN REQUIRED": "#f87171",
+}
+
+
+@st.cache_data(ttl=3600)
+def load_eda_data() -> tuple:
+    """Load EDA dataset from data/processed/eda_data_YYYY-MM-DD.csv.
+
+    To regenerate from the Fabric warehouse run:
+        python src/data_pipeline/fabric_connector.py
+    """
+    processed = DATA_DIR / "processed"
+    files = sorted(processed.glob("eda_data_*.csv"), reverse=True)
+    if not files:
+        st.error(
+            "No EDA data file found. Run: python src/data_pipeline/fabric_connector.py"
+        )
+        st.stop()
+    return pd.read_csv(files[0]), files[0].name, "fabric"
 
 
 # ── Sidebar navigation ───────────────────────────────────────────────────────
@@ -244,7 +292,7 @@ st.sidebar.markdown("""
 
 page = st.sidebar.radio(
     "Navigate",
-    ["🏪 Store Selector", "📊 Allocation Table", "🔧 What-If Simulation", "📤 Export & Activate"],
+    ["🏪 Store Selector", "📊 Allocation Table", "🔧 What-If Simulation", "📤 Export & Activate", "🔍 EDA Explorer"],
 )
 
 # ── Load data ─────────────────────────────────────────────────────────────────
@@ -252,11 +300,13 @@ recs_df, run_date = load_recommendations()
 capacity_df       = load_store_capacity()
 rates_df          = load_revenue_rates()
 
-# Merge capacity for display
-recs_df = recs_df.merge(
-    capacity_df[["STORE_CODE", "STORE_NAME", "REGION", "MIN_OPTION_COUNT"]],
-    left_on="store_id", right_on="STORE_CODE", how="left"
-)
+# Merge capacity for display — REGION is optional (may be absent in older capacity files)
+_cap_cols = [c for c in ["STORE_CODE", "STORE_NAME", "REGION", "MIN_OPTION_COUNT"] if c in capacity_df.columns]
+recs_df = recs_df.merge(capacity_df[_cap_cols], left_on="store_id", right_on="STORE_CODE", how="left")
+if "REGION" not in recs_df.columns:
+    recs_df["REGION"] = "–"
+if "STORE_NAME" not in recs_df.columns:
+    recs_df["STORE_NAME"] = recs_df["store_id"].astype(str)
 
 st.sidebar.markdown(f"**Solver run:** `{run_date}`")
 st.sidebar.markdown(f"**Stores loaded:** `{recs_df['store_id'].nunique()}`")
@@ -267,9 +317,39 @@ st.sidebar.markdown(
     "1. 🏪 **Store Selector** — choose region & store\n"
     "2. 📊 **Allocation Table** — view IP recommendations\n"
     "3. 🔧 **What-If Simulation** — pin a bucket & re-solve\n"
-    "4. 📤 **Export & Activate** — download Monday plan\n\n"
+    "4. 📤 **Export & Activate** — download Monday plan\n"
+    "5. 🔍 **EDA Explorer** — fleet-wide data analysis\n\n"
     "*Select a store first before navigating to screens 2–4.*"
 )
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**How the algorithm works**")
+st.sidebar.markdown("""
+Every Sunday night the solver reads the last **4 weeks of sales & SOH** data
+and runs an **Integer Programming (IP)** model for each store.
+
+**Step 1 — Revenue Rate**
+Each bucket (Category × Price tier) gets a score:
+`Revenue Rate = 4-week revenue ÷ avg weekly SOH`
+Higher rate = more revenue generated per unit of stock held.
+
+**Step 2 — Proportional Floor**
+Every bucket is guaranteed a *minimum* share of floor space, proportional
+to its revenue rate. No bucket is starved of space.
+
+**Step 3 — IP Solver (PuLP / HiGHS)**
+The remaining "free budget" is allocated by maximising total expected revenue
+subject to:
+- Each bucket stays within a min floor and a 45% cap
+- All shares sum to exactly 100%
+
+**Output**
+A recommended `display_share_%` per bucket — translated into style slot counts
+based on the store's display capacity.
+
+*The planner can override any bucket via What-If Simulation before exporting.*
+""")
+
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -283,22 +363,54 @@ if page == "🏪 Store Selector":
     Store Selector
   </div>
   <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
-    Filter by region, choose a store, and navigate to the Allocation Table for IP recommendations.
+    Choose a store and navigate to the Allocation Table for IP recommendations.
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns(3)
+    # Show currently selected store banner if navigating back
+    if "selected_store_id" in st.session_state:
+        sid   = st.session_state["selected_store_id"]
+        snam  = st.session_state["selected_store_name"]
+        slbl  = st.session_state.get("selected_store_label", f"{sid} - {snam}")
+        st.markdown(
+            f'<div style="background:#1e293b;border-radius:8px;padding:0.6rem 1rem;'
+            f'border:1px solid #334155;border-left:4px solid #34d399;margin-bottom:1rem;'
+            f'display:inline-flex;align-items:center;gap:0.8rem;">'
+            f'<span style="font-size:0.72rem;color:#34d399;font-weight:700;'
+            f'text-transform:uppercase;letter-spacing:0.5px;">Active store</span>'
+            f'<span style="color:#f8fafc;font-weight:600;">{slbl}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    col1, col2 = st.columns([2, 1])
     with col1:
-        regions = ["All"] + sorted(recs_df["REGION"].dropna().unique().tolist())
-        selected_region = st.selectbox("Region", regions)
+        # Build "{store_id} - {store_name}" labels for easy search
+        store_pairs = (
+            recs_df[["store_id", "STORE_NAME"]]
+            .drop_duplicates()
+            .sort_values("store_id")
+        )
+        store_labels = [
+            f"{int(r.store_id)} - {r.STORE_NAME}" if pd.notna(r.STORE_NAME) else str(int(r.store_id))
+            for r in store_pairs.itertuples()
+        ]
+        store_options = ["All"] + store_labels
+
+        # Pre-select previously chosen store when navigating back
+        default_idx = 0
+        if "selected_store_label" in st.session_state and st.session_state["selected_store_label"] in store_options:
+            default_idx = store_options.index(st.session_state["selected_store_label"])
+        selected_store_label = st.selectbox("Store", store_options, index=default_idx)
+
     with col2:
-        stores = recs_df["STORE_NAME"].dropna().unique().tolist()
-        if selected_region != "All":
-            stores = recs_df[recs_df["REGION"] == selected_region]["STORE_NAME"].dropna().unique().tolist()
-        selected_store_name = st.selectbox("Store", ["All"] + sorted(stores))
-    with col3:
         st.metric("Brand", "Arrow", help="Phase 1 covers Arrow brand only")
+
+    # Resolve selected store_id from label
+    selected_store_id_filter = None
+    if selected_store_label != "All":
+        selected_store_id_filter = int(selected_store_label.split(" - ")[0])
 
     # Summary table
     summary = (
@@ -311,10 +423,8 @@ if page == "🏪 Store Selector":
         .reset_index()
     )
 
-    if selected_region != "All":
-        summary = summary[summary["REGION"] == selected_region]
-    if selected_store_name != "All":
-        summary = summary[summary["STORE_NAME"] == selected_store_name]
+    if selected_store_id_filter is not None:
+        summary = summary[summary["store_id"] == selected_store_id_filter]
 
     summary["Health"] = summary["buckets"].apply(
         lambda n: "🟢 GOOD" if n < 20 else ("🟡 MANAGEABLE" if n < 50 else "🔴 WARNING")
@@ -357,17 +467,19 @@ so all stores should be 🟢 GOOD.
         )
 
     # Store selection for downstream screens
-    if selected_store_name != "All":
-        store_id = recs_df[recs_df["STORE_NAME"] == selected_store_name]["store_id"].values[0]
-        st.session_state["selected_store_id"]   = int(store_id)
-        st.session_state["selected_store_name"] = selected_store_name
+    if selected_store_label != "All" and selected_store_id_filter is not None:
+        match = recs_df[recs_df["store_id"] == selected_store_id_filter]
+        if not match.empty:
+            st.session_state["selected_store_id"]    = selected_store_id_filter
+            st.session_state["selected_store_name"]  = match["STORE_NAME"].values[0]
+            st.session_state["selected_store_label"] = selected_store_label
         st.markdown(f"""
 <div style="background:#1e293b;border-radius:10px;padding:1rem 1.4rem;
             border:1px solid #334155;border-left:4px solid #34d399;margin-top:1rem;">
   <div style="font-size:0.75rem;color:#34d399;font-weight:700;letter-spacing:0.6px;
               text-transform:uppercase;">Store Selected</div>
   <div style="font-size:1rem;font-weight:700;color:#f8fafc;margin:0.3rem 0 0.15rem;">
-    {selected_store_name}
+    {selected_store_label}
   </div>
   <div style="font-size:0.82rem;color:#94a3b8;">
     Navigate to <b style="color:#f59e0b;">Allocation Table</b> in the sidebar to view IP recommendations.
@@ -747,3 +859,525 @@ elif page == "📤 Export & Activate":
   </div>
 </div>
 """, unsafe_allow_html=True)
+
+
+# ────────────────────────────────────────────────────────────────────────────
+# SCREEN 5 — EDA EXPLORER
+# ────────────────────────────────────────────────────────────────────────────
+elif page == "🔍 EDA Explorer":
+    st.markdown("""
+<div style="background:linear-gradient(135deg,#1e293b,#0f172a);border-radius:14px;
+            padding:1.5rem 2rem;margin-bottom:1.5rem;border-left:5px solid #f59e0b;">
+  <div style="font-size:1.6rem;font-weight:800;color:#f8fafc;letter-spacing:-0.5px;">
+    EDA Explorer
+  </div>
+  <div style="color:#94a3b8;margin-top:0.3rem;font-size:0.9rem;">
+    Fleet-wide exploratory analysis — revenue rates, sell-through, signals, and data quality.
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+    # ── Load data ─────────────────────────────────────────────────────────
+    eda_df, file_label, eda_source = load_eda_data()
+
+    ctrl_col, status_col = st.columns([1, 5])
+    with ctrl_col:
+        if st.button("Clear cache", help="Reload from disk on next run"):
+            load_eda_data.clear()
+            st.rerun()
+    with status_col:
+        colour = "#34d399" if eda_source == "fabric" else "#f59e0b"
+        st.markdown(
+            f'<div style="font-size:0.72rem;color:#64748b;padding-top:0.6rem;">'
+            f'Loaded: <code style="background:#1e293b;color:{colour};padding:2px 8px;'
+            f'border-radius:4px;">{file_label}</code> &nbsp;·&nbsp; '
+            f'To refresh: <code style="background:#1e293b;color:#93c5fd;padding:2px 6px;'
+            f'border-radius:4px;">python src/data_pipeline/fabric_connector.py</code>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    # ── Filters ──────────────────────────────────────────────────────────
+    _has_region = "REGION" in eda_df.columns
+    fc1, fc2, fc3 = st.columns(3)
+    with fc1:
+        if _has_region:
+            all_regions = ["All"] + sorted(eda_df["REGION"].dropna().unique().tolist())
+            region_f = st.selectbox("Region", all_regions, key="eda_region")
+        else:
+            region_f = "All"
+            st.caption("Region not in dataset — re-run `fabric_connector.py`")
+    with fc2:
+        all_cats = ["All"] + sorted(eda_df["category"].dropna().unique().tolist())
+        cat_f = st.selectbox("Category", all_cats, key="eda_cat")
+    with fc3:
+        price_f = st.selectbox("Priceband", ["All", "Economy", "Mid", "Premium"], key="eda_price")
+
+    filt = eda_df.copy()
+    if _has_region and region_f != "All":
+        filt = filt[filt["REGION"] == region_f]
+    if cat_f != "All":
+        filt = filt[filt["category"] == cat_f]
+    if price_f != "All":
+        filt = filt[filt["priceband"] == price_f]
+
+    if filt.empty:
+        st.warning("No data matches the selected filters.")
+        st.stop()
+
+    # ── KPI strip ─────────────────────────────────────────────────────────
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Stores", int(filt["store_id"].nunique()))
+    k2.metric("Buckets", len(filt))
+    total_rev = filt["bucket_revenue_4w"].sum()
+    k3.metric(
+        "Fleet 4W Revenue",
+        f"₹{total_rev/1e7:.2f} Cr" if total_rev >= 1e7 else f"₹{total_rev/1e5:.1f} L",
+    )
+    avg_rate = filt["revenue_rate"].dropna().mean()
+    k4.metric("Avg Revenue Rate", f"₹{avg_rate:,.0f}" if avg_rate == avg_rate else "–")
+    pct_inc = (filt["signal_preview"] == "INCREASE").sum() / max(len(filt), 1) * 100
+    k5.metric("INCREASE signals", f"{pct_inc:.1f}%")
+
+    st.markdown("---")
+
+    # ── Tabs ──────────────────────────────────────────────────────────────
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📡 Fleet Overview",
+        "📈 Revenue Rate",
+        "🔄 Sell-Through & Discounts",
+        "🗂️ Data Quality",
+    ])
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 1 — FLEET OVERVIEW
+    # ══════════════════════════════════════════════════════════════════════
+    with tab1:
+        t1c1, t1c2 = st.columns(2)
+
+        # Signal distribution donut
+        with t1c1:
+            sig_counts = filt["signal_preview"].value_counts().reset_index()
+            sig_counts.columns = ["signal", "count"]
+            fig_sig = go.Figure(go.Pie(
+                labels=sig_counts["signal"],
+                values=sig_counts["count"],
+                hole=0.55,
+                marker_colors=[_SIGNAL_COLORS.get(s, "#94a3b8") for s in sig_counts["signal"]],
+                textinfo="label+percent",
+                textfont=dict(size=12, color="#e2e8f0"),
+            ))
+            fig_sig.update_layout(
+                title=dict(text="Signal Preview Distribution", font=dict(size=14, color="#f8fafc")),
+                showlegend=False,
+                height=320,
+                **_CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_sig, use_container_width=True)
+
+        # Solver readiness bar (per store)
+        with t1c2:
+            read_order  = ["IDEAL", "GOOD", "LIMITED", "COARSEN REQUIRED"]
+            read_counts = (
+                filt.groupby("store_id")["solver_readiness"].first().value_counts()
+            )
+            read_df = pd.DataFrame({
+                "Readiness": [r for r in read_order if r in read_counts.index],
+                "Stores":    [int(read_counts[r]) for r in read_order if r in read_counts.index],
+            })
+            fig_read = px.bar(
+                read_df, x="Readiness", y="Stores",
+                color="Readiness",
+                color_discrete_map=_READINESS_COLORS,
+                text="Stores",
+            )
+            fig_read.update_traces(textposition="outside", textfont_color="#f8fafc")
+            fig_read.update_layout(
+                title=dict(text="Solver Readiness by Store", font=dict(size=14, color="#f8fafc")),
+                showlegend=False,
+                height=320,
+                xaxis=dict(title="", gridcolor="#334155"),
+                yaxis=dict(title="Stores", gridcolor="#334155"),
+                **_CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_read, use_container_width=True)
+
+        # Signal mix stacked bar by category
+        st.markdown("#### Signal Mix by Category")
+        cat_sig = (
+            filt.groupby(["category", "signal_preview"])
+            .size()
+            .reset_index(name="count")
+        )
+        if not cat_sig.empty:
+            fig_cs = px.bar(
+                cat_sig, x="category", y="count", color="signal_preview",
+                color_discrete_map=_SIGNAL_COLORS,
+                barmode="stack",
+                labels={"category": "Category", "count": "Buckets", "signal_preview": "Signal"},
+            )
+            fig_cs.update_layout(
+                height=300,
+                xaxis=dict(title="", gridcolor="#334155"),
+                yaxis=dict(title="Buckets", gridcolor="#334155"),
+                **_CHART_LAYOUT,
+            )
+            fig_cs.update_layout(legend={**_LEGEND, "title": "Signal"})
+            st.plotly_chart(fig_cs, use_container_width=True)
+
+        # Store-level summary table
+        st.markdown("#### Store-Level Summary")
+        _grp_cols = ["store_id", "store_name"] + (["REGION"] if _has_region else [])
+        store_sum = (
+            filt.groupby(_grp_cols)
+            .agg(
+                Buckets           = ("bucket_key",        "count"),
+                Revenue_4W        = ("bucket_revenue_4w", "sum"),
+                Avg_Revenue_Rate  = ("revenue_rate",      "mean"),
+                INCREASE_count    = ("signal_preview",    lambda x: (x == "INCREASE").sum()),
+                Solver_Readiness  = ("solver_readiness",  "first"),
+            )
+            .reset_index()
+        )
+        store_sum["Revenue_4W"]       = store_sum["Revenue_4W"].map(lambda v: f"₹{v:,.0f}")
+        store_sum["Avg_Revenue_Rate"] = store_sum["Avg_Revenue_Rate"].map(
+            lambda v: f"₹{v:,.0f}" if v == v else "–"
+        )
+        _col_rename = {
+            "store_id":         "Store ID",
+            "store_name":       "Store",
+            "REGION":           "Region",
+            "Buckets":          "Buckets",
+            "Revenue_4W":       "4W Revenue",
+            "Avg_Revenue_Rate": "Avg Rate",
+            "INCREASE_count":   "INCREASE",
+            "Solver_Readiness": "Readiness",
+        }
+        st.dataframe(
+            store_sum.rename(columns=_col_rename),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 2 — REVENUE RATE
+    # ══════════════════════════════════════════════════════════════════════
+    with tab2:
+        rate_data = filt[filt["revenue_rate"].notna() & (filt["revenue_rate"] > 0)].copy()
+
+        if rate_data.empty:
+            st.info("No revenue rate data for the current filter selection.")
+        else:
+            # Histogram — fleet-wide distribution
+            fig_hist = px.histogram(
+                rate_data, x="revenue_rate", nbins=30,
+                color_discrete_sequence=["#f59e0b"],
+                labels={"revenue_rate": "Revenue Rate (₹/unit)"},
+            )
+            fig_hist.update_layout(
+                title=dict(text="Revenue Rate Distribution — all buckets", font=dict(size=14, color="#f8fafc")),
+                height=280,
+                xaxis=dict(title="Revenue Rate (₹/unit)", gridcolor="#334155"),
+                yaxis=dict(title="Bucket Count", gridcolor="#334155"),
+                bargap=0.05,
+                **_CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_hist, use_container_width=True)
+
+            # Box plots: by Category and by Priceband side-by-side
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                fig_box_cat = px.box(
+                    rate_data, x="category", y="revenue_rate",
+                    color="category",
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    labels={"revenue_rate": "Revenue Rate (₹/unit)", "category": ""},
+                )
+                fig_box_cat.update_layout(
+                    title=dict(text="Revenue Rate by Category", font=dict(size=13, color="#f8fafc")),
+                    showlegend=False,
+                    height=360,
+                    xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                    yaxis=dict(title="Revenue Rate", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_box_cat, use_container_width=True)
+
+            with bc2:
+                pb_order   = ["Economy", "Mid", "Premium"]
+                pb_present = [p for p in pb_order if p in rate_data["priceband"].values]
+                fig_box_pb = px.box(
+                    rate_data, x="priceband", y="revenue_rate",
+                    color="priceband",
+                    category_orders={"priceband": pb_present},
+                    color_discrete_map=_PRICEBAND_COLORS,
+                    labels={"revenue_rate": "Revenue Rate (₹/unit)", "priceband": ""},
+                )
+                fig_box_pb.update_layout(
+                    title=dict(text="Revenue Rate by Priceband", font=dict(size=13, color="#f8fafc")),
+                    showlegend=False,
+                    height=360,
+                    xaxis=dict(title="", gridcolor="#334155"),
+                    yaxis=dict(title="", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_box_pb, use_container_width=True)
+
+            # Top 10 / Bottom 10 buckets
+            top_n = 10
+            tt1, tt2 = st.columns(2)
+            _rate_cols = ["store_name", "bucket_key", "revenue_rate", "signal_preview"]
+            _rate_rename = {
+                "store_name":     "Store",
+                "bucket_key":     "Bucket",
+                "revenue_rate":   "Rate (₹/unit)",
+                "signal_preview": "Signal",
+            }
+            with tt1:
+                st.markdown(f"**Top {top_n} buckets by Revenue Rate**")
+                top10 = (
+                    rate_data.nlargest(top_n, "revenue_rate")[_rate_cols]
+                    .rename(columns=_rate_rename)
+                )
+                top10["Rate (₹/unit)"] = top10["Rate (₹/unit)"].map(lambda v: f"₹{v:,.0f}")
+                st.dataframe(top10, use_container_width=True, hide_index=True)
+            with tt2:
+                st.markdown(f"**Bottom {top_n} buckets by Revenue Rate**")
+                bot10 = (
+                    rate_data.nsmallest(top_n, "revenue_rate")[_rate_cols]
+                    .rename(columns=_rate_rename)
+                )
+                bot10["Rate (₹/unit)"] = bot10["Rate (₹/unit)"].map(lambda v: f"₹{v:,.0f}")
+                st.dataframe(bot10, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 3 — SELL-THROUGH & DISCOUNTS
+    # ══════════════════════════════════════════════════════════════════════
+    with tab3:
+        sc1, sc2 = st.columns(2)
+
+        # Scatter: revenue_rate vs sell_through_pct
+        with sc1:
+            scatter_data = filt[
+                filt["sell_through_pct"].notna() & filt["revenue_rate"].notna()
+            ]
+            if not scatter_data.empty:
+                fig_scatter = px.scatter(
+                    scatter_data,
+                    x="sell_through_pct",
+                    y="revenue_rate",
+                    color="signal_preview",
+                    color_discrete_map=_SIGNAL_COLORS,
+                    hover_data={
+                        "store_name":      True,
+                        "bucket_key":      True,
+                        "sell_through_pct":":.1f",
+                        "revenue_rate":    ":,.0f",
+                    },
+                    labels={
+                        "sell_through_pct": "Sell-Through %",
+                        "revenue_rate":     "Revenue Rate (₹/unit)",
+                        "signal_preview":   "Signal",
+                    },
+                )
+                fig_scatter.update_layout(
+                    title=dict(text="Revenue Rate vs Sell-Through %", font=dict(size=13, color="#f8fafc")),
+                    height=360,
+                    xaxis=dict(title="Sell-Through %", gridcolor="#334155"),
+                    yaxis=dict(title="Revenue Rate (₹/unit)", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_scatter, use_container_width=True)
+            else:
+                st.info("Sell-through data not available.")
+
+        # Sell-through distribution
+        with sc2:
+            st_data = filt[filt["sell_through_pct"].notna()]
+            if not st_data.empty:
+                fig_sth = px.histogram(
+                    st_data, x="sell_through_pct", nbins=20,
+                    color_discrete_sequence=["#34d399"],
+                    labels={"sell_through_pct": "Sell-Through %"},
+                )
+                fig_sth.update_layout(
+                    title=dict(text="Sell-Through % Distribution", font=dict(size=13, color="#f8fafc")),
+                    height=360,
+                    xaxis=dict(title="Sell-Through %", gridcolor="#334155"),
+                    yaxis=dict(title="Bucket Count",    gridcolor="#334155"),
+                    bargap=0.05,
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_sth, use_container_width=True)
+
+        # Discount analysis
+        disc_data = filt[filt["discount_pct"].notna()]
+        if not disc_data.empty:
+            dc1, dc2 = st.columns(2)
+            with dc1:
+                fig_disc = px.histogram(
+                    disc_data, x="discount_pct", nbins=20,
+                    color_discrete_sequence=["#f87171"],
+                    labels={"discount_pct": "Discount %"},
+                )
+                fig_disc.update_layout(
+                    title=dict(text="Discount % Distribution", font=dict(size=13, color="#f8fafc")),
+                    height=280,
+                    xaxis=dict(title="Discount %",   gridcolor="#334155"),
+                    yaxis=dict(title="Bucket Count", gridcolor="#334155"),
+                    bargap=0.05,
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_disc, use_container_width=True)
+
+            with dc2:
+                fig_disc_cat = px.box(
+                    disc_data, x="category", y="discount_pct",
+                    color="category",
+                    color_discrete_sequence=px.colors.qualitative.Set2,
+                    labels={"discount_pct": "Discount %", "category": ""},
+                )
+                fig_disc_cat.update_layout(
+                    title=dict(text="Discount % by Category", font=dict(size=13, color="#f8fafc")),
+                    showlegend=False,
+                    height=280,
+                    xaxis=dict(title="", tickangle=-30, gridcolor="#334155"),
+                    yaxis=dict(title="Discount %", gridcolor="#334155"),
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_disc_cat, use_container_width=True)
+
+        # Deadstock risk table: high SOH + low sell-through
+        st.markdown("#### Deadstock Risk — High SOH, Low Sell-Through")
+        soh_median = filt["avg_weekly_soh"].median()
+        dead_risk  = filt[
+            filt["sell_through_pct"].notna() &
+            filt["avg_weekly_soh"].notna()   &
+            (filt["sell_through_pct"] < 20)  &
+            (filt["avg_weekly_soh"]   > soh_median)
+        ].sort_values("sell_through_pct")[[
+            "store_name", "bucket_key", "sell_through_pct",
+            "avg_weekly_soh", "discount_pct", "revenue_rate", "signal_preview",
+        ]].rename(columns={
+            "store_name":      "Store",
+            "bucket_key":      "Bucket",
+            "sell_through_pct":"STR %",
+            "avg_weekly_soh":  "Avg Weekly SOH",
+            "discount_pct":    "Disc %",
+            "revenue_rate":    "Rate (₹/unit)",
+            "signal_preview":  "Signal",
+        })
+        if dead_risk.empty:
+            st.success("No deadstock risk buckets detected.")
+        else:
+            dead_risk["Avg Weekly SOH"] = dead_risk["Avg Weekly SOH"].map(lambda v: f"{v:,.0f}")
+            dead_risk["Rate (₹/unit)"]  = dead_risk["Rate (₹/unit)"].map(
+                lambda v: f"₹{v:,.0f}" if v == v else "–"
+            )
+            st.dataframe(dead_risk, use_container_width=True, hide_index=True)
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 4 — DATA QUALITY
+    # ══════════════════════════════════════════════════════════════════════
+    with tab4:
+        dq1, dq2 = st.columns(2)
+
+        with dq1:
+            dq_counts = filt["data_quality_flag"].value_counts().reset_index()
+            dq_counts.columns = ["flag", "count"]
+            _dq_colors = {
+                "OK":                          "#34d399",
+                "THIN — use category fallback":"#f59e0b",
+                "NO SALES DATA":               "#f87171",
+            }
+            fig_dq = px.bar(
+                dq_counts, x="flag", y="count",
+                color="flag",
+                color_discrete_map=_dq_colors,
+                text="count",
+                labels={"flag": "", "count": "Buckets"},
+            )
+            fig_dq.update_traces(textposition="outside", textfont_color="#f8fafc")
+            fig_dq.update_layout(
+                title=dict(text="Data Quality Flags", font=dict(size=13, color="#f8fafc")),
+                showlegend=False,
+                height=320,
+                xaxis=dict(gridcolor="#334155", tickangle=-15),
+                yaxis=dict(title="Buckets", gridcolor="#334155"),
+                **_CHART_LAYOUT,
+            )
+            st.plotly_chart(fig_dq, use_container_width=True)
+
+        with dq2:
+            days_data = filt[filt["days_with_sales"].notna()]
+            if not days_data.empty:
+                fig_days = px.histogram(
+                    days_data, x="days_with_sales", nbins=15,
+                    color_discrete_sequence=["#93c5fd"],
+                    labels={"days_with_sales": "Days with Sales (last 4 weeks)"},
+                )
+                fig_days.add_vline(
+                    x=14, line_dash="dash", line_color="#f59e0b",
+                    annotation_text="14-day threshold",
+                    annotation_font_color="#f59e0b",
+                    annotation_position="top right",
+                )
+                fig_days.update_layout(
+                    title=dict(text="Days with Sales Distribution", font=dict(size=13, color="#f8fafc")),
+                    height=320,
+                    xaxis=dict(title="Days with Sales", gridcolor="#334155"),
+                    yaxis=dict(title="Bucket Count",    gridcolor="#334155"),
+                    bargap=0.05,
+                    **_CHART_LAYOUT,
+                )
+                st.plotly_chart(fig_days, use_container_width=True)
+
+        # Thin / no-data bucket table
+        st.markdown("#### Buckets with Data Quality Issues")
+        thin_data = filt[filt["data_quality_flag"] != "OK"].sort_values("data_quality_flag")[[
+            "store_name", "bucket_key", "days_with_sales", "data_quality_flag", "revenue_rate",
+        ]].rename(columns={
+            "store_name":        "Store",
+            "bucket_key":        "Bucket",
+            "days_with_sales":   "Days w/ Sales",
+            "data_quality_flag": "Quality Flag",
+            "revenue_rate":      "Rate (₹/unit)",
+        })
+
+        if thin_data.empty:
+            st.success("All buckets have sufficient data (≥ 14 days with sales).")
+        else:
+            thin_data["Rate (₹/unit)"] = thin_data["Rate (₹/unit)"].map(
+                lambda v: f"₹{v:,.0f}" if v == v else "seeded from category avg"
+            )
+            st.dataframe(thin_data, use_container_width=True, hide_index=True)
+            st.caption(
+                f"{len(thin_data)} bucket(s) have thin data. "
+                "The solver seeds their revenue_rate from the category average across comparable stores."
+            )
+
+        # SOH snapshot coverage per store
+        st.markdown("#### SOH Snapshot Coverage by Store")
+        soh_cov = (
+            filt[filt["soh_snapshot_days"].notna()]
+            .groupby("store_id")
+            .agg(
+                store_name        = ("store_name",        "first"),
+                avg_snapshot_days = ("soh_snapshot_days", "mean"),
+                min_snapshot_days = ("soh_snapshot_days", "min"),
+            )
+            .reset_index()
+        )
+        if not soh_cov.empty:
+            soh_cov["avg_snapshot_days"] = soh_cov["avg_snapshot_days"].round(1)
+            soh_cov["min_snapshot_days"] = soh_cov["min_snapshot_days"].astype(int)
+            st.dataframe(
+                soh_cov.rename(columns={
+                    "store_id":          "Store ID",
+                    "store_name":        "Store",
+                    "avg_snapshot_days": "Avg Snapshot Days",
+                    "min_snapshot_days": "Min Snapshot Days",
+                }),
+                use_container_width=True,
+                hide_index=True,
+            )

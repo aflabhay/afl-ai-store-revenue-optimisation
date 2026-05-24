@@ -69,6 +69,10 @@ def solve_store(
     buckets : pd.DataFrame
         One row per active bucket. Required columns:
             bucket_key (str), revenue_rate (float)
+        Optional column:
+            style_count_in_bucket (int) — distinct styles with SOH in this bucket.
+            When present, the solver caps each bucket's style slots at available
+            SOH styles so recommendations are physically fulfillable.
     display_capacity : int
         MIN_OPTION_COUNT for this store — from store capacity Excel.
     config : SolverConfig
@@ -102,8 +106,22 @@ def solve_store(
             ),
         }
 
-    bucket_keys = buckets["bucket_key"].tolist()
-    rates       = dict(zip(buckets["bucket_key"], buckets["revenue_rate"]))
+    bucket_keys  = buckets["bucket_key"].tolist()
+    rates        = dict(zip(buckets["bucket_key"], buckets["revenue_rate"]))
+
+    # SOH availability: max style slots this bucket can physically fill.
+    # If style_count_in_bucket is provided, cap = floor(styles / capacity × 100).
+    # Falls back to display_capacity (no SOH constraint) when column is absent.
+    if "style_count_in_bucket" in buckets.columns:
+        soh_style_cap_pct = {
+            row.bucket_key: max(
+                1,  # always allow at least 1%
+                int(row.style_count_in_bucket / display_capacity * 100),
+            )
+            for row in buckets.itertuples()
+        }
+    else:
+        soh_style_cap_pct = {b: config.max_share for b in bucket_keys}
 
     # ── Dynamic proportional floors ──────────────────────────────────────
     # Each bucket is guaranteed at least (floor_weight × its proportional
@@ -140,6 +158,7 @@ def solve_store(
         dynamic_caps = {
             b: min(
                 config.max_share,
+                soh_style_cap_pct[b],   # C7: never exceed available SOH styles
                 max(
                     dynamic_floors[b],  # cap must always be ≥ floor
                     round(rates[b] / total_rate * config.total_share * config.cap_multiplier),
@@ -148,7 +167,7 @@ def solve_store(
             for b in bucket_keys
         }
     else:
-        dynamic_caps = {b: config.max_share for b in bucket_keys}
+        dynamic_caps = {b: min(config.max_share, soh_style_cap_pct[b]) for b in bucket_keys}
 
     # Guard: total cap must cover total_share or the LP is infeasible.
     if sum(dynamic_caps.values()) < config.total_share:
@@ -193,10 +212,16 @@ def solve_store(
     # before calling this function (handled in run_solver.py)
 
     # ── Solve ────────────────────────────────────────────────────────────
-    solver = pulp.PULP_CBC_CMD(
-        msg=0,
-        timeLimit=config.solver_timeout,
-    )
+    # Prefer HiGHS (arm64-native, works on Mac Apple Silicon + Ubuntu).
+    # Fall back to bundled CBC (works on Ubuntu x86_64 and any platform
+    # where the bundled binary matches the OS architecture).
+    available = pulp.listSolvers(onlyAvailable=True)
+    if "HiGHS" in available:
+        solver = pulp.HiGHS(msg=0, timeLimit=config.solver_timeout)
+    elif "HiGHS_CMD" in available:
+        solver = pulp.HiGHS_CMD(msg=0, timeLimit=config.solver_timeout)
+    else:
+        solver = pulp.PULP_CBC_CMD(msg=0, timeLimit=config.solver_timeout)
     prob.solve(solver)
 
     status = pulp.LpStatus[prob.status]

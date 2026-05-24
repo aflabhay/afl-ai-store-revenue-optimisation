@@ -5,9 +5,12 @@ Batch runner — solves the IP model for all stores and writes output.
 Runs every Sunday night before Monday rearrangement.
 
 Usage:
-    python src/solver/run_solver.py --data dummy --store all
-    python src/solver/run_solver.py --data dummy --store 8194
-    python src/solver/run_solver.py --data fabric --store all   # requires .env
+    python src/solver/run_solver.py --store all
+    python src/solver/run_solver.py --store 8194
+
+Requires:
+    data/processed/eda_data_YYYY-MM-DD.csv
+    Generate with: python src/data_pipeline/fabric_connector.py
 """
 
 import argparse
@@ -16,16 +19,11 @@ import pandas as pd
 from datetime import date
 from pathlib import Path
 
-from src.data_pipeline.revenue_rate_builder import load_dummy_data, compute_revenue_rates
 from src.solver.ip_model import solve_store, format_output_table, SolverConfig
 
 
 DATA_DIR    = Path(__file__).parents[2] / "data"
 OUTPUT_DIR  = DATA_DIR / "processed"
-
-
-def load_store_capacity(data_dir: Path) -> pd.DataFrame:
-    return pd.read_csv(data_dir / "raw" / "store_capacity.csv")
 
 
 def run_all_stores(
@@ -64,9 +62,14 @@ def run_all_stores(
             continue
 
         # C6: only existing buckets (already enforced by filtering revenue_rate > 0)
+        # Pass style_count_in_bucket when available so the solver respects SOH limits
+        bucket_cols = ["bucket_key", "revenue_rate"]
+        if "style_count_in_bucket" in store_rates.columns:
+            bucket_cols.append("style_count_in_bucket")
+
         result = solve_store(
             store_id=store_id,
-            buckets=store_rates[["bucket_key", "revenue_rate"]],
+            buckets=store_rates[bucket_cols],
             display_capacity=display_capacity,
             config=config,
         )
@@ -85,8 +88,9 @@ def run_all_stores(
 
 
 def main():
+    _DEFAULT_OPTION_COUNT = 400   # fallback for stores not yet in store_capacity_real.csv
+
     parser = argparse.ArgumentParser(description="Run IP solver for store allocation")
-    parser.add_argument("--data",  default="dummy", choices=["dummy", "fabric"])
     parser.add_argument("--store", default="all", help="Store code or 'all'")
     parser.add_argument("--date",  default=None,  help="YYYY-MM-DD (defaults to today)")
     args = parser.parse_args()
@@ -95,27 +99,74 @@ def main():
 
     print(f"\n{'='*60}")
     print(f"  Arvind Fashions — Store Allocation Solver")
-    print(f"  As-of date : {as_of}")
-    print(f"  Data source: {args.data}")
+    print(f"  As-of date  : {as_of}")
     print(f"  Store filter: {args.store}")
     print(f"{'='*60}\n")
 
-    # ── Load data ────────────────────────────────────────────────────────
-    if args.data == "dummy":
-        print("Loading dummy data...")
-        sales_df, soh_df = load_dummy_data(DATA_DIR / "raw")
-    else:
-        raise NotImplementedError(
-            "Fabric connector not configured. Add FABRIC_CONNECTION_STRING to .env"
+    # ── Load EDA dataset ─────────────────────────────────────────────────
+    eda_files = sorted(OUTPUT_DIR.glob("eda_data_*.csv"), reverse=True)
+    if not eda_files:
+        raise FileNotFoundError(
+            "No eda_data_*.csv found in data/processed/.\n"
+            "Run first: python src/data_pipeline/fabric_connector.py"
+        )
+    print(f"Loading EDA dataset: {eda_files[0].name}")
+    eda_df = pd.read_csv(eda_files[0])
+
+    valid_mask = eda_df["revenue_rate"].notna() & (eda_df["revenue_rate"] > 0)
+    print(f"  Revenue rate coverage: {valid_mask.sum()} valid / {len(eda_df)} total buckets")
+    print(f"  Stores with >=1 valid rate: {eda_df[valid_mask]['store_id'].nunique()}\n")
+
+    rate_cols = ["store_id", "bucket_key", "revenue_rate"]
+    if "style_count_in_bucket" in eda_df.columns:
+        rate_cols.append("style_count_in_bucket")
+
+    rates_df = (
+        eda_df[rate_cols]
+        .dropna(subset=["revenue_rate"])
+        .drop_duplicates()
+    )
+    print(f"  {len(rates_df)} store-bucket rates loaded\n")
+
+    if rates_df.empty:
+        raise ValueError(
+            "All revenue_rate values are NULL in the EDA file.\n"
+            "Re-run: python src/data_pipeline/fabric_connector.py"
         )
 
-    # ── Compute revenue rates ─────────────────────────────────────────────
-    print("Computing rolling 4-week revenue rates...")
-    rates_df = compute_revenue_rates(sales_df, soh_df, as_of_date=as_of)
-    print(f"  {len(rates_df)} store-bucket rates computed\n")
+    # ── Build store capacity ──────────────────────────────────────────────
+    # Use existing store_capacity_real.csv for MIN_OPTION_COUNT if available,
+    # otherwise default to _DEFAULT_OPTION_COUNT for all stores.
+    real_cap_path = OUTPUT_DIR / "store_capacity_real.csv"
+    eda_store_cols = ["store_id", "store_name"] + (
+        ["REGION"] if "REGION" in eda_df.columns else []
+    )
+    eda_stores = eda_df[eda_store_cols].drop_duplicates()
 
-    # ── Load store capacity ───────────────────────────────────────────────
-    capacity_df = load_store_capacity(DATA_DIR)
+    if real_cap_path.exists():
+        existing_cap = pd.read_csv(real_cap_path)[["STORE_CODE", "MIN_OPTION_COUNT"]]
+        capacity_df = pd.merge(
+            eda_stores,
+            existing_cap,
+            left_on="store_id", right_on="STORE_CODE", how="left",
+        )
+    else:
+        capacity_df = eda_stores.copy()
+        capacity_df["STORE_CODE"] = capacity_df["store_id"]
+        capacity_df["MIN_OPTION_COUNT"] = float("nan")
+
+    capacity_df["MIN_OPTION_COUNT"] = (
+        capacity_df["MIN_OPTION_COUNT"].fillna(_DEFAULT_OPTION_COUNT).astype(int)
+    )
+    capacity_df["STORE_CODE"] = capacity_df["store_id"]
+    capacity_df["STORE_NAME"] = capacity_df["store_name"]
+
+    # Persist so Streamlit app reads it automatically
+    cap_out_cols = ["STORE_CODE", "STORE_NAME", "MIN_OPTION_COUNT"] + (
+        ["REGION"] if "REGION" in capacity_df.columns else []
+    )
+    capacity_df[cap_out_cols].to_csv(real_cap_path, index=False)
+    print(f"  Store capacity saved: {real_cap_path}\n")
 
     # ── Run solver ────────────────────────────────────────────────────────
     print("Running IP solver...\n")
