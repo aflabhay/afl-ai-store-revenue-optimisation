@@ -1,4 +1,4 @@
-# Arvind Fashions — Store Revenue Optimisation System
+# Arvind Fashions — Arrow Brand Store Revenue Optimisation
 
 > **Business Requirements Document:** See [`docs/BRD_v2.0.docx`](docs/BRD_v2.0.docx)
 
@@ -6,21 +6,20 @@
 
 ## 1. Project Origin & Business Context
 
-This project was initiated following a series of store visits to Arvind Fashions Limited stores across India. The key observations from those visits that drove the need for this system:
+This project was initiated following store visits to Arvind Fashions Limited (Arrow brand) stores across India. Key observations:
 
-- **Monday rearrangement cycle:** Store teams physically rearrange the display floor every Monday. Until now, this was done entirely by intuition and store manager experience — no data-driven guidance existed.
-- **65/35 display-to-backroom split:** Approximately 65% of total store inventory is on display at any given time; 35% sits in the backroom as a replenishment buffer.
-- **Three-layer stock flow:** As display items sell during the week, staff pull matching sizes from the backroom to refill the display. If backroom runs out of a specific size, the warehouse replenishes that size **next day** — independently of the Monday cycle. This means virtually all committed inventory has a path to customers across a week.
-- **Style count as the true constraint:** Store display capacity is measured in **number of distinct styles (options)** that can be shown — not units. The `Min Option Count` per store (from the store capacity Excel, sourced from VM guidelines) is the binding physical constraint.
-- **No structured display data:** Store managers currently photograph walls every Monday and share via WhatsApp — unstructured, unsearchable, and unavailable for analytics.
+- **Monday rearrangement cycle:** Store teams physically rearrange the display floor every Monday. Until now, done entirely by intuition — no data-driven guidance existed.
+- **65/35 display-to-backroom split:** ~65% of total store inventory is on display at any given time; 35% sits in the backroom as a replenishment buffer.
+- **Three-layer stock flow:** As display items sell, staff pull matching sizes from backroom to refill. If backroom runs out, the warehouse replenishes next day — independently of the Monday cycle.
+- **Style count as the true constraint:** Display capacity is measured in **number of distinct styles (options)** that can be shown — not units. `Min Option Count` per store (from VM guidelines) is the binding physical constraint.
 
 ### What the system does
 
-For each Arvind Fashions store, every Sunday night, the system:
-1. Pulls the latest stock-on-hand (SOH) snapshot from Microsoft Fabric Data Warehouse
-2. Computes rolling 4-week revenue rates per bucket (Category × Priceband)
+For each Arrow store, every Sunday night:
+1. Pulls the latest SOH snapshot and 4-week sales from **Microsoft Fabric Data Warehouse**
+2. Computes rolling 4-week revenue rates per bucket (Category x Priceband) using data-driven, per-category priceband breaks
 3. Runs an **Integer Programming (IP) optimisation model** to recommend the optimal display share allocation across all active buckets
-4. Surfaces recommendations through a **Streamlit internal tool** that planners and area managers can interact with, simulate what-if scenarios, and approve before Monday rearrangement
+4. Surfaces recommendations through a **Streamlit internal tool** for planners and area managers to review and approve before Monday rearrangement
 
 ---
 
@@ -28,256 +27,253 @@ For each Arvind Fashions store, every Sunday night, the system:
 
 | Term | Definition |
 |---|---|
-| **Bucket** | A unique Collection × Category × Priceband combination (e.g. Arrow / Formal Shirts / Premium) |
-| **display_share[store, bucket]** | The % of the display floor allocated to a bucket on Monday (the decision variable) |
-| **display_capacity[store]** | Min Option Count — number of distinct styles the store can display on Monday, from store capacity Excel |
-| **total_inventory[store]** | Total inventory physically in the store on Monday morning — the SOH snapshot, net of all sales |
-| **revenue_rate[store, bucket]** | ₹ revenue generated per unit of inventory committed to this bucket over the last 4 weeks |
-| **Pivotable size / CORE style** | Best-selling sizes (e.g. M, L in shirts) — if these sell out, warehouse replenishes next day |
-| **Monday rearrangement** | Weekly physical rearrangement of the display floor based on IP solver recommendations |
-| **Phase 1** | IP optimisation model using rolling 4-week revenue rates — live now |
-| **Phase 1.5** | Hybrid: IP model + early ML using display Excel data once 4–6 months collected |
-| **Phase 2** | Full ML model replacing revenue rate estimation, using 2 years of weekly display data |
+| **Bucket** | A unique Category x Priceband combination (e.g. Formal Shirts / Premium). Key format: `{Category} | {Priceband}` |
+| **display_share[bucket]** | % of display floor allocated to a bucket on Monday — the decision variable (integer 1-45) |
+| **display_capacity[store]** | Min Option Count — number of distinct styles the store can display, from VM guidelines |
+| **revenue_rate[store, bucket]** | Revenue generated per unit of SOH committed to this bucket over 4 weeks: `bucket_revenue_4w / (avg_weekly_soh x 4)` — units: Rs/unit/4-week period |
+| **style_count_in_bucket** | Distinct styles with SOH > 0 in this bucket — caps style slot recommendations to only physically fulfillable options |
+| **Priceband** | Economy / Mid / Premium — thresholds computed per category from MRP p33/p67 percentiles, rounded to Rs 500 |
+| **Monday rearrangement** | Weekly physical display rearrangement based on solver recommendations |
+| **Phase 1** | IP optimisation using rolling 4-week revenue rates (current) |
+| **Phase 1.5** | Hybrid IP + early ML once 4-6 months of display data collected |
+| **Phase 2** | Full ML model once 2 years of display data available |
 
 ---
 
-## 3. Optimisation Model
+## 3. Revenue Rate Formula
+
+```
+revenue_rate = bucket_revenue_4w / (avg_weekly_soh x 4)
+```
+
+- **Numerator**: Total revenue from this bucket over last 4 weeks (Rs)
+- **Denominator**: `avg_weekly_soh x 4` — average weekly SOH units scaled to a 4-week window (matches the numerator)
+- **Unit**: Rs per unit per 4-week period (dimensionally consistent)
+- SOH and sales are joined at STYLE_CODE level so both sides refer to the same styles
+
+---
+
+## 4. Optimisation Model (IP Solver)
 
 ### Decision Variable
 ```
-display_share[store, bucket] = % of display floor style slots given to this bucket (integer, 1–45)
+display_share[bucket]  in  {1, 2, ..., 45}   (integer percentage)
 ```
 
-### Objective Function
+### Objective
 ```
-Maximise:  SUM over all buckets [ display_share[store, bucket] × revenue_rate[store, bucket] ]
+Maximise:  SUM over buckets [ display_share[bucket] x revenue_rate[bucket] ]
 ```
-
-`display_capacity[store]` is a constant per store and does not affect which allocation the solver picks — it only appears in constraint C5.
-
-### Revenue Rate
-```
-revenue_rate[store, bucket] = bucket_revenue[store, bucket, last 4 weeks]
-                               / bucket_inventory[store, bucket, last 4 weeks]
-```
-
-Revenue per unit of total committed inventory (display + backroom + warehouse replenishments). Refreshed every Sunday from Fabric. Falls back to category average across comparable stores if fewer than 2 weeks of data exist for a bucket.
 
 ### Constraints
 
-| ID | Constraint | Formula |
+| ID | Description | Rule |
 |---|---|---|
-| C1 | Display shares sum to 100% | SUM(display_share) = 100 |
-| C2 | Whole-number percentages only | display_share ∈ ℤ |
-| C3 | No bucket exceeds 45% | display_share ≤ 45 |
-| C4 | No bucket below 1% | display_share ≥ 1 |
-| C5 | Style count ≤ display capacity | SUM(ROUND(share/100 × display_capacity)) ≤ display_capacity |
-| C6 | Only existing buckets | display_share = 0 if bucket never stocked in store |
+| C1 | Shares sum to 100% | SUM(display_share) = 100 |
+| C2 | Whole-number percentages | display_share in Z (integer) |
+| C3 | Proportional cap | display_share <= min(45%, proportional_share x cap_multiplier) |
+| C4 | Proportional floor | display_share >= max(1%, proportional_share x floor_weight) |
+| C5 | Style count <= display capacity | SUM(ROUND(share/100 x display_capacity)) <= display_capacity |
+| C6 | Only existing buckets | Buckets with revenue_rate = 0 excluded before solver runs |
+| C7 | SOH style cap | display_share <= style_count_in_bucket / display_capacity x 100 — never recommend more style slots than available SOH can fill |
 
-### Solver Meaningfulness — Bucket Count Warning
+### Dynamic Floor & Cap Logic
 
-The solver's ability to find a meaningfully differentiated allocation depends on active bucket count:
+Pure linear objectives produce "bang-bang" allocations — the solver concentrates all free budget in the single highest-rate bucket. To prevent this:
+
+- **Dynamic floor** = `max(1%, proportional_fair_share x floor_weight)` — each bucket guaranteed at least 50% of its proportional fair share (default `floor_weight = 0.50`)
+- **Dynamic cap** = `min(45%, proportional_fair_share x cap_multiplier, soh_style_cap_pct)` — each bucket capped at 1.5x its proportional fair share (default `cap_multiplier = 1.5`)
+
+Where `proportional_fair_share[bucket] = revenue_rate[bucket] / SUM(revenue_rate) x 100`.
+
+This forces the solver to spread the free allocation budget across multiple buckets proportionally to their revenue rates, rather than concentrating in the top 1-2 buckets.
+
+**Allocation signals output:**
+- `INCREASE` — bucket hit its proportional cap (solver maxed it out — show more)
+- `HOLD` — bucket above floor, below cap (solver allocated some but not all free budget)
+- `REDUCE` — bucket at its proportional floor (solver gave it minimum — show less)
+
+### Solver Backend
+
+PuLP as the modelling interface. Solver selection at runtime (in order):
+1. **HiGHS** (Python API) — preferred; arm64-native, works on Mac Apple Silicon
+2. **HiGHS_CMD** — fallback if Python API unavailable
+3. **PULP_CBC_CMD** — bundled PuLP CBC; fallback for Ubuntu x86_64 deployment
+
+### Solver Meaningfulness
 
 | Active buckets | Solver freedom | Action |
 |---|---|---|
 | < 20 | Full — ideal | Proceed as designed |
-| 20–49 | Good | Proceed, monitor outputs |
-| 50–99 | Limited | Consider Category-only (drop Priceband) |
-| ≥ 100 | None — floor binds | Must coarsen bucket definition |
+| 20-49 | Good | Proceed, monitor outputs |
+| >= 100 | None — floor binds all budget | Coarsen bucket definition |
 
-**For Arrow specifically** (single brand, focused assortment: Formal Shirts / Chinos / Trousers / Casual Shirts × 2–3 pricepoints) expected bucket count per store is **6–15** — well within the ideal range.
+For Arrow (Formal Shirts / Chinos / Trousers / Casual Shirts x 3 pricebands), expected bucket count per store is **6-15** — well within the ideal range.
 
 ---
 
-## 4. Data Sources
+## 5. Data-Driven Priceband Breaks (Per Category)
 
-### Fabric Data Warehouse (Microsoft)
+Priceband thresholds are computed from actual MRP distribution, not hardcoded. Different categories (Shirts vs Trousers) have different price ranges so one set of global thresholds is wrong.
+
+**Two-pass pipeline:**
+
+1. **MRP distribution query** (`_MRP_DIST_SQL`) — fetches p10/p25/p33/p50/p67/p75/p90 of transaction MRP per category from last 4 weeks. Uses window-function form of `PERCENTILE_CONT ... WITHIN GROUP ... OVER (PARTITION BY category)` (required by SQL Server T-SQL).
+
+2. **Break computation** (`compute_priceband_breaks()`) — p33 = Economy cap, p67 = Mid cap; both rounded to nearest Rs 500; minimum Rs 500 separation enforced. Default fallback: Economy < Rs 2,000, Mid < Rs 3,000.
+
+3. **Dynamic SQL injection** (`_build_priceband_case()`) — builds a nested `CASE WHEN` expression per category and injects it into `_EDA_SQL_TEMPLATE` via a `<<PRICEBAND_CASE>>` placeholder.
+
+4. **Config saved** to `data/processed/priceband_config.json` so the Streamlit app can display current breaks in the Price Bands EDA tab.
+
+---
+
+## 6. Data Pipeline
+
+### Run order
+
+```bash
+# Step 1: Fetch from Fabric (two-pass: MRP distribution -> EDA)
+python src/data_pipeline/fabric_connector.py
+
+# Step 2: Run IP solver for all stores
+python src/solver/run_solver.py --store all
+
+# Step 3: Launch app
+streamlit run src/streamlit_app/app.py
+```
+
+### Outputs written to `data/processed/`
+
+| File | Written by | Purpose |
+|---|---|---|
+| `mrp_distribution_YYYY-MM-DD.csv` | fabric_connector | MRP percentiles per category |
+| `priceband_config.json` | fabric_connector | Per-category break points for app display |
+| `eda_data_YYYY-MM-DD.csv` | fabric_connector | Main EDA dataset with revenue rates |
+| `store_capacity_real.csv` | run_solver | Store Min Option Count (written after first solver run) |
+| `recommendations_YYYY-MM-DD.csv` | run_solver | Flat solver output per store-bucket |
+| `solver_results_YYYY-MM-DD.json` | run_solver | Full solver output with metadata |
+
+### Fabric Tables Used
 
 | Table | Purpose |
 |---|---|
 | `[prd].[FACT_FNO_SALES_TC_ONLINE_BASE]` | Transaction-level sales — units, revenue, MRP, discount |
 | `[prd].[FACT_FNO_SOH_DAILY]` | Daily stock-on-hand snapshot per SKU per store |
-
-### External Inputs
-
-| Input | Source | Used for |
-|---|---|---|
-| Store capacity Excel | Merchandising / VM team | `display_capacity[store]` — Min Option Count per store |
-| Store closure records | Area Managers | Exclude closed-period data from revenue rate calculation |
-
-### Dummy Data (this repo)
-
-Sample data files in `data/raw/` simulate the Fabric tables for local development and testing. See `data/README.md` for schema details.
+| `[prd].[DIM_SAP_STORE_MASTER]` | Store master — name, region, active Arrow stores |
 
 ---
 
-## 5. Tech Stack
+## 7. Streamlit App
+
+Single-file app (`src/streamlit_app/app.py`) with sidebar navigation.
+
+### Pages
+
+| Page | Description |
+|---|---|
+| Store Selector | Search by `{store_id} - {store_name}`. Selection persists across page navigation via session state. Active store shown as banner. |
+| Allocation Recommendations | IP solver output for selected store — display share %, style slots, INCREASE/HOLD/REDUCE signals, expected revenue index |
+| EDA Explorer | 6-tab exploratory dashboard |
+
+### EDA Explorer Tabs
+
+| Tab | Contents |
+|---|---|
+| Fleet Overview | Store count, bucket coverage, top/bottom stores by revenue rate |
+| Revenue Rate | Distribution histograms and heatmaps by category x priceband |
+| Sell-Through & Discounts | Discount depth vs sell-through scatter, category trends |
+| SOH Analysis | SOH KPIs, histogram, SOH vs revenue rate scatter, store-level SOH table |
+| Data Quality | Revenue rate coverage, NULL counts, bucket completeness |
+| Price Bands | Current priceband performance (revenue, rate, sell-through) + recommended vs current break comparison per category |
+
+---
+
+## 8. Tech Stack
 
 | Component | Technology |
 |---|---|
-| Optimisation solver | Python — PuLP (open source IP solver) |
+| Optimisation solver | PuLP (IP modelling) + HiGHS (arm64 Mac) / CBC (x86_64 Ubuntu) |
 | Data layer | Microsoft Fabric Data Warehouse (T-SQL) |
-| Database connector | `pyodbc` with Fabric ODBC driver |
+| DB connector | pyodbc + AAD token auth (InteractiveBrowserCredential local; notebookutils on Fabric) |
 | App framework | Streamlit |
-| App hosting | Azure App Service |
-| Image storage | Azure Blob Storage |
-| Image capture | Power Apps (no-code) |
-| Image analysis (Phase 2) | SAM (Segment Anything Model, Meta) + CLIP (OpenAI) |
+| App hosting | Azure App Service (Ubuntu VM, x86_64) |
+| Image storage | Azure Blob Storage (Phase 1.5+) |
+| Image capture | Power Apps (Phase 1.5+) |
+| Image analysis | SAM + CLIP (Phase 2) |
 
 ---
 
-## 6. Project Phases
+## 9. Repository Structure
+
+```
+afl-ai-store-revenue-optimisation/
+|
++-- README.md                          # This file
++-- CLAUDE.md                          # AI assistant instructions and project context
++-- requirements.txt                   # Python dependencies
++-- .env.example                       # Environment variables template
+|
++-- data/
+|   +-- processed/                     # Auto-generated outputs (not committed)
+|       +-- eda_data_YYYY-MM-DD.csv
+|       +-- priceband_config.json
+|       +-- mrp_distribution_*.csv
+|       +-- store_capacity_real.csv
+|       +-- recommendations_*.csv
+|       +-- solver_results_*.json
+|
++-- src/
+|   +-- data_pipeline/
+|   |   +-- fabric_connector.py        # Fabric ODBC + two-pass EDA fetch + priceband SQL
+|   |   +-- revenue_rate_builder.py    # Legacy helper (kept for reference)
+|   |
+|   +-- solver/
+|   |   +-- ip_model.py                # IP model: C1-C7, dynamic floor/cap, HiGHS/CBC
+|   |   +-- run_solver.py              # Batch runner: all stores -> recommendations CSV
+|   |
+|   +-- streamlit_app/
+|   |   +-- app.py                     # Streamlit app: store selector, allocation, EDA
+|   |
+|   +-- utils/
+|       +-- size_break_monitor.py      # Daily CORE style SOH check (future use)
+|
++-- notebooks/                         # EDA and analysis notebooks
++-- docs/
+    +-- BRD_v2.0.docx
+```
+
+---
+
+## 10. Project Phases
 
 ### Phase 1 — IP Optimisation (current)
-- Rolling 4-week revenue rates from Fabric
-- Integer Programming solver (PuLP)
-- Streamlit internal tool for planner interaction
-- Store capacity Excel as display constraint
+- Rolling 4-week revenue rates from Fabric, joined at STYLE_CODE level
+- Data-driven per-category priceband breaks from MRP p33/p67 percentiles
+- IP solver (PuLP + HiGHS) with C1-C7 constraints
+- C7 SOH style cap — recommendations never exceed available SOH
+- Dynamic proportional floors and caps to prevent bang-bang concentration
+- Streamlit internal tool for planner review and approval
 
-### Phase 1.5 — Hybrid ML (once 4–6 months display data available)
-- Weekly display Excel uploads via Power Apps → Azure Blob
-- ML model on observed display share data supplements revenue rates
+### Phase 1.5 — Hybrid ML (4-6 months of display data)
+- Weekly display Excel uploads via Power Apps -> Azure Blob
+- ML model supplements revenue rates with observed display share data
 - Shadow mode: ML runs alongside IP, validated before promotion
 
-### Phase 2 — Full ML (once 2 years display data available)
+### Phase 2 — Full ML (2 years of display data)
 - ML model replaces revenue rate estimation entirely
 - SAM + CLIP extracts style counts from Monday wall photos
-- Per-bucket display share becomes a directly observed input
+- Per-bucket display share becomes a directly observed feature
 
 ---
 
-## 7. Repository Structure
+## 11. Key Business Rules
 
-```
-arvind-store-optimisation/
-│
-├── README.md                          # This file
-├── requirements.txt                   # Python dependencies
-├── .env.example                       # Environment variables template
-├── .gitignore
-│
-├── config/
-│   └── config.yaml                    # Store list, brand config, solver params
-│
-├── data/
-│   ├── README.md                      # Schema documentation
-│   ├── raw/
-│   │   ├── sales_sample.csv           # Dummy sales transactions
-│   │   ├── soh_sample.csv             # Dummy SOH daily snapshots
-│   │   └── store_capacity.csv         # Min/Max option count per store
-│   └── processed/
-│       └── revenue_rates_sample.csv   # Pre-computed revenue rates (dummy)
-│
-├── src/
-│   ├── data_pipeline/
-│   │   ├── __init__.py
-│   │   ├── fabric_connector.py        # Fabric ODBC connection
-│   │   ├── revenue_rate_builder.py    # Rolling 4-week rate computation
-│   │   └── soh_snapshot.py            # Monday SOH extraction
-│   │
-│   ├── solver/
-│   │   ├── __init__.py
-│   │   ├── ip_model.py                # Core IP model (PuLP)
-│   │   ├── constraints.py             # C1–C6 constraint definitions
-│   │   └── run_solver.py              # Batch solver across all stores
-│   │
-│   ├── streamlit_app/
-│   │   ├── app.py                     # Main Streamlit entry point
-│   │   ├── pages/
-│   │   │   ├── 01_store_selector.py   # Screen 1 — store filter
-│   │   │   ├── 02_allocation.py       # Screen 2 — allocation table
-│   │   │   ├── 03_whatif.py           # Screen 3 — what-if simulation
-│   │   │   └── 04_export.py           # Screen 4 — export & activate
-│   │   └── utils/
-│   │       ├── charts.py              # Traffic light visualisations
-│   │       └── export_helpers.py      # Excel / PDF generation
-│   │
-│   └── utils/
-│       ├── __init__.py
-│       ├── priceband.py               # Economy / Mid / Premium classification
-│       └── size_break_monitor.py      # Daily CORE style SOH check
-│
-├── notebooks/
-│   ├── 01_data_exploration.ipynb      # Initial EDA on sales and SOH data
-│   ├── 02_revenue_rate_analysis.ipynb # Revenue rate distribution analysis
-│   ├── 03_solver_demo.ipynb           # Step-by-step solver walkthrough
-│   └── 04_bucket_count_diagnostic.ipynb # Solver meaningfulness check
-│
-├── tests/
-│   ├── test_constraints.py            # Verify C1–C6 are always satisfied
-│   ├── test_revenue_rate.py           # Revenue rate computation tests
-│   └── test_solver.py                 # Solver output validation
-│
-└── docs/
-    └── BRD_v2.0.docx                  # Full Business Requirements Document
-```
-
----
-
-## 8. Quick Start (Local Development with Dummy Data)
-
-```bash
-# 1. Clone the repo
-git clone https://github.com/your-org/arvind-store-optimisation.git
-cd arvind-store-optimisation
-
-# 2. Create virtual environment
-python -m venv venv
-source venv/bin/activate   # Mac/Linux
-venv\Scripts\activate      # Windows
-
-# 3. Install dependencies
-pip install -r requirements.txt
-
-# 4. Copy environment variables
-cp .env.example .env
-# Edit .env — add your Fabric connection string when ready
-
-# 5. Run solver on dummy data
-python src/solver/run_solver.py --data dummy --store all
-
-# 6. Launch Streamlit app
-streamlit run src/streamlit_app/app.py
-```
-
----
-
-## 9. Implementation Timeline
-
-| Week | Milestone |
-|---|---|
-| 1 | Environment setup, store capacity Excel validation, bucket taxonomy sign-off |
-| 2 | Rolling 4-week revenue rate pipeline in Fabric, Sunday refresh schedule |
-| 3 | IP model coded in PuLP, all 6 constraints, full fleet test run |
-| 4 | Edge case handling, infeasibility fallbacks, fleet stress test |
-| 5 | Pilot validation — 50 stores, 3 regions, Area Manager feedback |
-| 6 | Streamlit Screens 1 & 2 — store selector + allocation table |
-| 7 | Streamlit Screens 3 & 4 — what-if panel + export & activate |
-| 8 | Override capture, size-break daily job, internal end-to-end test |
-| 9 | User acceptance testing — planners + Area Managers |
-| 10 | Deploy to Azure App Service, first live Monday recommendations |
-
----
-
-## 10. Key Business Rules
-
-- **Monday only:** All display rearrangement recommendations activate on Monday. Mid-week changes queue for the following Monday.
-- **Next-day size replenishment:** When a CORE style size reaches zero SOH, a warehouse replenishment request is triggered automatically — independent of the Monday cycle.
-- **Override requires reason:** Any planner deviation from the solver recommendation must be logged with a written reason before saving — this data feeds Phase 1.5 model improvement.
-- **Arrow first:** Phase 1 covers Arrow brand only. Expansion to USPA, Flying Machine, and Excalibur follows once the model is validated.
-- **Quarterly taxonomy review:** Bucket definitions (Category × Priceband thresholds) are reviewed with Merchandising every quarter as Arrow's price range evolves.
-
----
-
-## 11. Contact & Ownership
-
-| Role | Responsibility |
-|---|---|
-| Analytics / Data Science | IP model, revenue rate pipeline, solver validation |
-| Technology | Streamlit app, Fabric integration, Azure deployment |
-| Merchandising | Bucket taxonomy, priceband thresholds, store capacity Excel |
-| Area Managers | Pilot validation, override feedback, store closure records |
-| Store Operations | Monday activation, Power App image uploads |
+- **Monday only:** All recommendations activate on Monday. Mid-week changes queue for the following Monday.
+- **Override requires reason:** Any deviation from solver recommendations must be logged — feeds Phase 1.5 improvement.
+- **Arrow first:** Phase 1 covers Arrow brand only. Expansion to USPA, Flying Machine, Excalibur follows after validation.
+- **Quarterly taxonomy review:** Priceband thresholds reviewed with Merchandising every quarter. Refresh by re-running `fabric_connector.py`.
+- **SOH-constrained:** Solver never recommends more style slots for a bucket than the number of distinct styles with actual SOH in that bucket (C7).
 
 ---
 
