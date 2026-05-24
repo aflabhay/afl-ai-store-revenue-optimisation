@@ -135,6 +135,24 @@ soh_sizes AS (
       AND b.INVENTORY_DATE <= d.window_end
       AND b.Opening_SOH    >  0
     GROUP BY b.STORE_CODE, b.STYLECODE
+),
+latest_soh_date AS (
+    -- Single-row CTE: the most recent inventory snapshot date.
+    SELECT MAX(INVENTORY_DATE) AS snap_date
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH]
+),
+current_soh_style AS (
+    -- Today's exact SOH per store x style (sum across all sizes).
+    -- This gives planners an accurate "right now" stock count, not a 4-week avg.
+    SELECT
+        b.STORE_CODE AS store_id,
+        b.STYLECODE  AS style_code,
+        SUM(b.Opening_SOH) AS current_soh
+    FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_BASE_SOH] b
+    INNER JOIN active_arrow_stores st ON b.STORE_CODE = st.STORE_CODE
+    CROSS JOIN latest_soh_date ld
+    WHERE b.INVENTORY_DATE = ld.snap_date
+    GROUP BY b.STORE_CODE, b.STYLECODE
 )
 SELECT
     sl.store_id,
@@ -156,6 +174,9 @@ SELECT
     COALESCE(so.style_soh_days,       0)    AS style_soh_days,
     -- Distinct sizes in stock — determines hanger count per style on display
     COALESCE(sz.style_size_count,     0)    AS style_size_count,
+    -- Current (today's snapshot) SOH per style — accurate point-in-time stock
+    COALESCE(cs.current_soh,          0)    AS current_soh,
+    ld.snap_date                            AS soh_snapshot_date,
     d.window_start,
     d.window_end
 FROM sales_style sl
@@ -166,6 +187,10 @@ LEFT JOIN soh_style so
 LEFT JOIN soh_sizes sz
     ON  sz.store_id   = sl.store_id
     AND sz.style_code = sl.style_code
+LEFT JOIN current_soh_style cs
+    ON  cs.store_id   = sl.store_id
+    AND cs.style_code = sl.style_code
+CROSS JOIN latest_soh_date ld
 CROSS JOIN date_bounds d
 ORDER BY sl.store_id, sl.category, sl.style_code;
 """
@@ -423,6 +448,11 @@ def _aggregate_to_buckets(style_df: pd.DataFrame) -> pd.DataFrame:
     # have no stock and must not count toward the C7 cap.
     style_df["_has_soh"] = (style_df["style_avg_daily_soh"] > 0).astype(int)
 
+    # current_soh: present only when fetched via the updated SQL (Option B).
+    # Default to 0 if column is absent so aggregation always works.
+    if "current_soh" not in style_df.columns:
+        style_df["current_soh"] = 0
+
     grp = style_df.groupby(grp_cols)
 
     bucket = grp.agg(
@@ -438,6 +468,8 @@ def _aggregate_to_buckets(style_df: pd.DataFrame) -> pd.DataFrame:
         soh_snapshot_days      = ("style_soh_days",      "max"),
         # Only styles with Opening_SOH > 0 count — these are physically fulfillable
         style_count_in_bucket  = ("_has_soh",            "sum"),
+        # current_soh_bucket: today's exact SOH summed across all styles and sizes in bucket
+        current_soh_bucket     = ("current_soh",         "sum"),
         window_start           = ("window_start",        "first"),
         window_end             = ("window_end",          "first"),
     ).reset_index()

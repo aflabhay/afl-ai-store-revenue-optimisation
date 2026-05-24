@@ -565,10 +565,14 @@ elif page == "📊 Allocation Table":
         _eda_cols = ["bucket_key", "avg_weekly_soh", "style_count_in_bucket"]
         if "avg_sizes_per_style" in _eda_alloc.columns:
             _eda_cols.append("avg_sizes_per_style")
+        if "current_soh_bucket" in _eda_alloc.columns:
+            _eda_cols.append("current_soh_bucket")
         _store_eda = _eda_alloc[_eda_alloc["store_id"] == store_id][_eda_cols].copy()
         store_recs = store_recs.merge(_store_eda, on="bucket_key", how="left", suffixes=("", "_eda"))
         store_recs["avg_weekly_soh"] = store_recs["avg_weekly_soh"].fillna(0)
         store_recs["style_count_in_bucket"] = store_recs["style_count_in_bucket"].fillna(0).astype(int)
+        if "current_soh_bucket" in store_recs.columns:
+            store_recs["current_soh_bucket"] = store_recs["current_soh_bucket"].fillna(0).astype(int)
         if "avg_sizes_per_style_eda" in store_recs.columns:
             store_recs["avg_sizes_per_style"] = store_recs["avg_sizes_per_style"].fillna(
                 store_recs["avg_sizes_per_style_eda"]
@@ -615,7 +619,7 @@ elif page == "📊 Allocation Table":
     cols_to_show = [
         "signal_icon", "bucket_key", "floor_share", "display_share_pct",
         "hanger_slots", "style_slots", "avg_sizes_per_style",
-        "style_count_in_bucket", "avg_weekly_soh",
+        "style_count_in_bucket", "current_soh_bucket", "avg_weekly_soh",
         "revenue_rate", "expected_rev_index",
     ]
     col_rename = {
@@ -627,7 +631,8 @@ elif page == "📊 Allocation Table":
         "style_slots":           "Rec. Style-Size Count",
         "avg_sizes_per_style":   "Avg Sizes/Style",
         "style_count_in_bucket": "Available Styles",
-        "avg_weekly_soh":        "SOH (units)",
+        "current_soh_bucket":    "Current SOH (today)",
+        "avg_weekly_soh":        "Avg Weekly SOH",
         "revenue_rate":          "Revenue Rate (₹/unit)",
         "expected_rev_index":    "Rev Index",
     }
@@ -639,7 +644,7 @@ elif page == "📊 Allocation Table":
         store_recs["avg_weekly_soh"] = store_recs["avg_weekly_soh"].round(0).astype(int)
 
     # Only include columns that are actually present
-    for _col in ["style_count_in_bucket", "avg_weekly_soh", "avg_sizes_per_style"]:
+    for _col in ["style_count_in_bucket", "current_soh_bucket", "avg_weekly_soh", "avg_sizes_per_style"]:
         if _col not in store_recs.columns:
             cols_to_show = [c for c in cols_to_show if c != _col]
             col_rename.pop(_col, None)
@@ -654,7 +659,8 @@ elif page == "📊 Allocation Table":
         "**Rec. Hanger Spaces** = Recommended % × display capacity (physical pegs allocated to bucket). "
         "**Rec. Style-Size Count** = Hanger Spaces ÷ Avg Sizes/Style (distinct styles to arrange on those pegs; each style occupies Avg Sizes/Style hangers). "
         "**Rec. Style-Size Count ≤ Available Styles** always — C7 ensures you never recommend more styles than stock. "
-        "**SOH (units)** = total stock units for the bucket summed across all styles and all sizes."
+        "**Current SOH (today)** = exact stock units in this bucket as of the latest inventory snapshot. "
+        "**Avg Weekly SOH** = average weekly stock over the past 4 weeks (used for revenue rate calculation)."
     )
 
     st.markdown(
