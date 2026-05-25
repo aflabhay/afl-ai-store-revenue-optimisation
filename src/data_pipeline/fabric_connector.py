@@ -965,9 +965,10 @@ def fetch_eda_dataset(breaks: dict = None) -> pd.DataFrame:
     """
     # Load breaks from saved config if not supplied
     if breaks is None:
-        config_path = Path(__file__).parents[2] / "data" / "processed" / "priceband_config.json"
-        if config_path.exists():
-            with open(config_path) as fh:
+        processed = Path(__file__).parents[2] / "data" / "processed"
+        config_files = sorted(processed.glob("priceband_config_*.json"), reverse=True)
+        if config_files:
+            with open(config_files[0]) as fh:
                 breaks = json.load(fh).get("breaks", {})
         if not breaks:
             breaks = {"_default": {"economy_cap": 2000, "mid_cap": 3000}}
@@ -1001,8 +1002,8 @@ if __name__ == "__main__":
 
     Outputs (all in data/processed/):
         mrp_distribution_YYYY-MM-DD.csv   — MRP percentiles per category
-        priceband_config.json             — per-category break points (used by app)
-        priceband_mapping.csv             — human-readable mapping table
+        priceband_config_YYYY-MM-DD.json  — per-category break points (most recent loaded by app)
+        priceband_mapping_YYYY-MM-DD.csv  — human-readable mapping table with KDE + p33/p67
         eda_data_YYYY-MM-DD.csv           — bucket-level EDA dataset for solver + app
     """
     import argparse
@@ -1048,15 +1049,16 @@ if __name__ == "__main__":
     print(f"  KDE breaks: {kde_count} categories | p33/p67 fallback: {fb_count} categories")
     print(f"  KDE plots saved to: {kde_plot_dir}/")
 
-    # Save JSON config (loaded by app and fetch_eda_dataset)
-    config_path = out_dir / "priceband_config.json"
+    # Save JSON config — date-stamped, most recent loaded automatically
+    config_path = out_dir / f"priceband_config_{today}.json"
     with open(config_path, "w") as fh:
         json.dump({"generated_on": today, "breaks": breaks}, fh, indent=2)
     print(f"  Priceband config saved: {config_path.name}")
 
-    # Save human-readable CSV mapping — both KDE and p33/p67 breaks
+    # Save human-readable CSV mapping — date-stamped, both KDE and p33/p67 breaks
     mapping_rows = [
         {
+            "generated_on":    today,
             "category":        cat,
             "economy_cap":     v["economy_cap"],
             "mid_cap":         v["mid_cap"],
@@ -1068,8 +1070,9 @@ if __name__ == "__main__":
         }
         for cat, v in sorted(breaks.items())
     ]
-    pd.DataFrame(mapping_rows).to_csv(out_dir / "priceband_mapping.csv", index=False)
-    print(f"  Priceband mapping CSV saved: priceband_mapping.csv")
+    mapping_path = out_dir / f"priceband_mapping_{today}.csv"
+    pd.DataFrame(mapping_rows).to_csv(mapping_path, index=False)
+    print(f"  Priceband mapping CSV saved: {mapping_path.name}")
 
     print(f"\n  {'Category':<25} {'Method':<18} {'Economy cap':>14}  {'Mid cap':>12}")
     print(f"  {'-'*72}")

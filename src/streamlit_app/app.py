@@ -265,14 +265,14 @@ _READINESS_COLORS = {
 @st.cache_data(ttl=3600)
 def load_priceband_config():
     """
-    Load priceband_config.json and latest mrp_distribution_*.csv from data/processed/.
-    Returns (breaks_dict, mrp_df_or_None).
+    Load most recent priceband_config_YYYY-MM-DD.json and mrp_distribution_*.csv
+    from data/processed/. Returns (breaks_dict, mrp_df_or_None).
     """
     processed = DATA_DIR / "processed"
-    config_path = processed / "priceband_config.json"
+    config_files = sorted(processed.glob("priceband_config_*.json"), reverse=True)
     breaks = None
-    if config_path.exists():
-        with open(config_path) as f:
+    if config_files:
+        with open(config_files[0]) as f:
             cfg = json.load(f)
         breaks = cfg.get("breaks", {})
 
