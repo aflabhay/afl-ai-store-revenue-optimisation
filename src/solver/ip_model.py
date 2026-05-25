@@ -109,19 +109,19 @@ def solve_store(
     bucket_keys  = buckets["bucket_key"].tolist()
     rates        = dict(zip(buckets["bucket_key"], buckets["revenue_rate"]))
 
-    # C7 — SOH hanger cap: never recommend more hangers than available SOH can fill.
-    # display_capacity = Min Option Count = total physical hangers in store (NOT style count).
-    # Each style occupies avg_sizes_per_style hangers (one hanger per size on display).
-    # e.g. SHIRT with 5 sizes in stock needs 5 hangers per style.
+    # C7 — SOH style cap: never recommend more style slots than available SOH styles.
+    # display_capacity = Min Option Count = number of distinct STYLES the store displays.
+    # This is a STYLE count, not a hanger count.
+    # e.g. display_capacity = 400 means the store can show 400 distinct styles.
+    # Physical hangers = style_slots × avg_sizes_per_style (shown in output, not in solver).
     #
-    # Formula: soh_hanger_cap% = style_count * avg_sizes / display_capacity * 100
-    # This caps the hanger allocation so we never recommend more hanger-slots than
-    # the bucket can physically fill with complete size runs.
+    # Formula: soh_style_cap% = style_count_in_bucket / display_capacity * 100
+    # Caps each bucket's style allocation so we never recommend more styles than SOH can fill.
     #
     # C7 is applied as a SEPARATE hard PuLP constraint (not mixed into dynamic_caps)
     # to prevent the proportional-cap guard from silently overriding it.
     #
-    # When total hangers required < display_capacity, caps are normalised proportionally
+    # When total SOH styles < display_capacity, caps are normalised proportionally
     # to sum to 100 so the LP stays feasible while preserving relative SOH proportions.
     sizes_per_bucket = {
         row.bucket_key: max(1.0, getattr(row, "avg_sizes_per_style", 1.0))
@@ -136,8 +136,7 @@ def solve_store(
         raw_soh_caps = {
             row.bucket_key: max(
                 1,
-                int(row.style_count_in_bucket * sizes_per_bucket[row.bucket_key]
-                    / display_capacity * 100),
+                int(row.style_count_in_bucket / display_capacity * 100),
             )
             for row in buckets.itertuples()
         }
@@ -314,17 +313,16 @@ def solve_store(
         rate         = rates[b]
         floor        = dynamic_floors[b]
         avg_sizes    = sizes_per_bucket.get(b, 1.0)
-        # hanger_slots: physical hangers allocated to this bucket.
-        # Use int() truncation (not round) so sum never exceeds display_capacity.
-        hanger_slots = int(share / 100 * display_capacity)
-        # style_slots: distinct styles that can be displayed with those hangers
-        # = floor(hanger_slots / avg_sizes), capped at style_count_in_bucket.
-        # Cap prevents rare categories (e.g. JACKET) with avg_sizes fallback=1.0
-        # from recommending more style slots than actual SOH styles exist.
         style_count  = style_count_per_bucket.get(b, 0)
-        style_slots  = max(1, int(hanger_slots / avg_sizes)) if hanger_slots > 0 else 0
+        # style_slots: distinct styles to display in this bucket.
+        # display_capacity = style count capacity (Min Option Count), so:
+        # style_slots = share% × display_capacity (truncated to prevent C5 breach).
+        style_slots  = int(share / 100 * display_capacity)
         if style_count > 0:
-            style_slots = min(style_slots, style_count)
+            style_slots = min(style_slots, style_count)   # never exceed available SOH styles
+        # hanger_slots: physical hangers required = styles × avg sizes per style.
+        # display_capacity × 5 ≈ max hanger capacity (informational only, not a constraint).
+        hanger_slots = round(style_slots * avg_sizes)
         rev_index    = share * rate
 
         cap     = dynamic_caps[b]
@@ -351,8 +349,8 @@ def solve_store(
         })
         total_rev_index += rev_index
 
-    hanger_slots_used = sum(r["hanger_slots"] for r in results)
     style_slots_used  = sum(r["style_slots"]  for r in results)
+    hanger_slots_used = sum(r["hanger_slots"] for r in results)
 
     # Validation assertions — should never fail
     assert sum(r["display_share_pct"] for r in results) == config.total_share, "C1 violated"
@@ -360,9 +358,9 @@ def solve_store(
         config.min_share <= r["display_share_pct"] <= r["cap_share"]
         for r in results
     ), "C3/C4 violated"
-    # C5: total hangers used must not exceed display capacity.
-    # style_slots_used < hanger_slots_used (since style_slots = hanger_slots / avg_sizes)
-    assert hanger_slots_used <= display_capacity, "C5 violated"
+    # C5: total style slots must not exceed display_capacity (style count capacity).
+    # Guaranteed by int() truncation + C1: SUM(int(s/100 * cap)) <= cap.
+    assert style_slots_used <= display_capacity, "C5 violated"
 
     return {
         "store_id":                    store_id,

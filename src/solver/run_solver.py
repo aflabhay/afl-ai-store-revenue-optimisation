@@ -85,7 +85,7 @@ def run_all_stores(
         print(
             f"  {status_icon}  Store {store_id:>5} | "
             f"{len(store_rates):>2} buckets | "
-            f"capacity {display_capacity:>3} hangers | "
+            f"capacity {display_capacity:>3} styles (~{display_capacity * 5} hangers) | "
             f"status: {result['status']}"
         )
 

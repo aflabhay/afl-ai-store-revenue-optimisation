@@ -101,18 +101,18 @@ floor[b] = max(1%, proportional_fair_share[b] * floor_weight)   # default 0.50
 cap[b]   = min(45%, proportional_fair_share[b] * cap_multiplier)  # default 1.5
 ```
 
-### C7 — SOH hanger cap (critical: separate hard constraint)
+### C7 — SOH style cap (critical: separate hard constraint)
 
-- `display_capacity` = **physical hangers** (Min Option Count), NOT style count
-- Each style occupies `avg_sizes_per_style` hangers (one hanger per size on display)
+- `display_capacity` = **style count** (Min Option Count), NOT hanger count — e.g. 400 means 400 distinct styles
+- Max hanger capacity = `display_capacity × 5` ≈ 2000 hangers (informational, not a solver constraint)
 - `avg_sizes_per_style` computed at **category level** fleet-wide (not per bucket) — sizes are a category property, not priceband-specific
-- `soh_hanger_cap_pct[b] = max(1, int(style_count[b] * avg_sizes[b] / display_capacity * 100))`
-- C7 is a **separate hard PuLP constraint** `prob += x[b] <= soh_hanger_cap_pct[b]` — NOT mixed into variable bounds
+- `soh_style_cap_pct[b] = max(1, int(style_count[b] / display_capacity * 100))` — pure style cap, no avg_sizes
+- C7 is a **separate hard PuLP constraint** `prob += x[b] <= soh_style_cap_pct[b]` — NOT mixed into variable bounds
 - When `sum(soh_caps) < 100`: **normalise proportionally** so they sum to 100 → C7 always applied
 - Dynamic floors reconciled to `min(floor, soh_cap)` before LP build
 - Guard 2: if `sum(min(proportional_cap, soh_cap)) < 100`, relax proportional caps to 45%
-- `hanger_slots` (shown as **Rec. Display Units**) = `int(display_share% / 100 * display_capacity)` — physical hangers allocated
-- `style_slots` (shown as **Rec. Style Count**) = `min(int(hanger_slots / avg_sizes), style_count_in_bucket)` — distinct styles to show (capped at SOH)
+- `style_slots` (shown as **Rec. Style Count**) = `int(display_share% / 100 * display_capacity)`, capped at `style_count_in_bucket`
+- `hanger_slots` (shown as **Rec. Display Units**) = `style_slots × avg_sizes_per_style` — physical hangers required
 - `style_slots` always ≤ `style_count_in_bucket` — C7 + explicit cap in output
 
 ### Revenue rate formula
@@ -251,5 +251,7 @@ sudo apt-get update && sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18
 - Do not mix soh_hanger_cap_pct into dynamic_caps — C7 must be a separate hard PuLP constraint
 - Do not skip C7 normalisation — when sum(soh_caps) < 100, normalise proportionally before applying
 - Do not compute `avg_sizes_per_style` at bucket level — always use category-level fleet-wide average
-- Do not equate `hanger_slots` (Rec. Display Units) with `style_slots` (Rec. Style Count) — hanger_slots = styles × sizes; style_slots = hanger_slots ÷ avg_sizes
+- Do not equate `hanger_slots` (Rec. Display Units) with `style_slots` (Rec. Style Count) — style_slots = share% × display_capacity; hanger_slots = style_slots × avg_sizes
+- Do not treat `display_capacity` as hanger count — it is STYLE count (Min Option Count). Hangers = style_slots × avg_sizes.
+- Do not include `avg_sizes` in the C7 formula — C7 caps style slots vs style capacity: `soh_style_cap_pct = style_count / display_capacity * 100`
 - `style_slots` must always be capped at `style_count_in_bucket` in solver output (rare categories fall back to avg_sizes=1)

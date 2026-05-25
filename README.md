@@ -29,12 +29,12 @@ For each Arrow store, every Sunday night:
 |---|---|
 | **Bucket** | A unique Category x Priceband combination (e.g. Formal Shirts / Premium). Key format: `{Category} | {Priceband}` |
 | **display_share[bucket]** | % of display floor allocated to a bucket on Monday — the decision variable (integer 1-45) |
-| **display_capacity[store]** | Min Option Count — number of distinct styles the store can display, from VM guidelines |
+| **display_capacity[store]** | Min Option Count — number of distinct **styles** the store can display (NOT hangers). Max hanger capacity ≈ display_capacity × 5. |
 | **revenue_rate[store, bucket]** | Revenue generated per unit of SOH committed to this bucket over 4 weeks: `bucket_revenue_4w / (avg_weekly_soh x 4)` — units: Rs/unit/4-week period |
 | **style_count_in_bucket** | Distinct styles with SOH > 0 in this bucket — caps style slot recommendations to only physically fulfillable options |
 | **avg_sizes_per_style** | Fleet-wide average distinct sizes per style for this category (e.g. SHIRT ≈ 5, TROUSER ≈ 5, SUIT ≈ 4). Computed at category level — sizes don't vary by priceband. |
-| **hanger_slots (Rec. Display Units)** | Physical hangers allocated to bucket = `display_share% × display_capacity`. `display_capacity` is hanger count, NOT style count. |
-| **style_slots (Rec. Style Count)** | Distinct styles to arrange = `floor(hanger_slots / avg_sizes_per_style)`, capped at `style_count_in_bucket`. Always ≤ available SOH styles. |
+| **style_slots (Rec. Style Count)** | Distinct styles to display = `int(display_share% × display_capacity)`, capped at `style_count_in_bucket`. Always ≤ available SOH styles. |
+| **hanger_slots (Rec. Display Units)** | Physical hangers required = `style_slots × avg_sizes_per_style`. Max store hanger capacity ≈ `display_capacity × 5`. |
 | **current_soh_bucket** | Today's exact SOH units for the bucket — `SUM(Opening_SOH)` at `MAX(INVENTORY_DATE)` across all styles and sizes. Shown as "Current SOH (today)" in the allocation table for real-time stock context. |
 | **avg_weekly_soh** | 4-week average weekly SOH for the bucket — used as the denominator in `revenue_rate`. Shown as "Avg Weekly SOH" in the allocation table. |
 | **Priceband** | Economy / Mid / Premium — thresholds computed per category from MRP p33/p67 percentiles, rounded to Rs 500 |
@@ -83,7 +83,7 @@ Maximise:  SUM over buckets [ display_share[bucket] x revenue_rate[bucket] ]
 | C4 | Proportional floor | display_share >= max(1%, proportional_share x floor_weight) |
 | C5 | Style count <= display capacity | SUM(ROUND(share/100 x display_capacity)) <= display_capacity |
 | C6 | Only existing buckets | Buckets with revenue_rate = 0 excluded before solver runs |
-| C7 | SOH style cap | display_share <= style_count_in_bucket / display_capacity x 100 — never recommend more style slots than available SOH can fill |
+| C7 | SOH style cap | display_share <= style_count_in_bucket / display_capacity x 100 — never recommend more styles than available SOH can fill (display_capacity = style count) |
 
 ### Dynamic Floor & Cap Logic
 
@@ -107,8 +107,8 @@ This forces the solver to spread the free allocation budget across multiple buck
 
 ```
 hanger_cap%[b] = style_count[b] × avg_sizes[b] / display_capacity × 100
-hanger_slots (Rec. Display Units) = int(display_share% / 100 × display_capacity)   ← physical hangers
-style_slots  (Rec. Style Count)   = min(floor(hanger_slots / avg_sizes), style_count)  ← distinct styles
+style_slots  (Rec. Style Count)   = int(display_share% / 100 × display_capacity)  ← distinct styles
+hanger_slots (Rec. Display Units) = style_slots × avg_sizes_per_style              ← physical hangers
 ```
 
 `avg_sizes_per_style` is computed at **category level** fleet-wide (not per bucket or store) since sizes are a category property, not priceband-specific.
