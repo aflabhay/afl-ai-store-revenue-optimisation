@@ -38,6 +38,7 @@ import json
 import struct
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyodbc
 
@@ -383,30 +384,236 @@ ORDER BY c.style_count DESC;
 """
 
 
-# ── Priceband computation ─────────────────────────────────────────────────────
+# ── Deduplicated style-level MRP SQL (for KDE) ───────────────────────────────
+# One row per style × category, fleet-wide (store dimension collapsed).
+# This is what KDE runs on — each style counts once regardless of how many
+# stores stock it, so popular styles don't inflate the density curve.
+_MRP_STYLE_SQL = """
+WITH date_bounds AS (
+    SELECT
+        CONVERT(DATE, DATEADD(WEEK, -4, GETDATE())) AS window_start,
+        CONVERT(DATE, GETDATE())                     AS window_end
+),
+active_arrow_stores AS (
+    SELECT STORE_CODE
+    FROM [Arvind_Analytics_Warehouse].[prd].[DIM_SAP_STORE_MASTER]
+    WHERE ARROW != 0 AND STATUS = 'ACTIVE'
+)
+SELECT
+    UPPER(LTRIM(RTRIM(f.CATEGORY)))  AS category,
+    f.STYLECODE                      AS style_code,
+    AVG(CAST(f.UNITMRP AS FLOAT))    AS avg_mrp
+FROM [Arvind_Analytics_Warehouse].[prd].[FACT_FNO_SALES_TC_ONLINE_BASE] f
+INNER JOIN active_arrow_stores st ON f.SAP_STORECODE = st.STORE_CODE
+CROSS JOIN date_bounds d
+WHERE f.BRAND          = 'ARROW'
+  AND f.INVOICETYPE    = 'SALES'
+  AND f.QUALITY        = 'Q1'
+  AND f.QUANTITY       > 0
+  AND UPPER(LTRIM(RTRIM(f.CATEGORY))) NOT IN (
+        'PROMO', 'SAMPLES', 'SCRAP', 'TRIMS', 'CARRY BAG'
+  )
+  AND CONVERT(DATE, f.INVOICE_DATE) >= d.window_start
+  AND CONVERT(DATE, f.INVOICE_DATE) <  d.window_end
+GROUP BY UPPER(LTRIM(RTRIM(f.CATEGORY))), f.STYLECODE
+ORDER BY category, avg_mrp;
+"""
 
-def compute_priceband_breaks(mrp_dist_df: pd.DataFrame) -> dict:
+
+# ── KDE break detection ───────────────────────────────────────────────────────
+
+def _kde_breaks_for_category(
+    mrp_values: np.ndarray,
+    plot_path: Path = None,
+    category: str = "",
+    p33_cap: float = None,
+    p67_cap: float = None,
+) -> tuple:
     """
-    Compute data-driven priceband break points from MRP percentile distribution.
+    Find 2 natural valley points in MRP distribution using Kernel Density Estimation.
 
-    Strategy: tertile split using p33 (Economy cap) and p67 (Mid cap).
-    Values are rounded to the nearest Rs 500 for clean, readable thresholds.
+    Strategy: fit KDE with Scott's bandwidth, evaluate on 500-point grid,
+    find local minima (order=20 ≈ 180 Rs buffer each side), pick the 2 with
+    the lowest density (deepest valleys = most significant price gaps).
+
+    Parameters
+    ----------
+    mrp_values : array of style-level MRP values (one per style, deduplicated)
+    plot_path  : if provided, save KDE chart as PNG here
+    category   : category name for plot title
+    p33_cap    : p33/p67 breaks drawn on plot for comparison
+    p67_cap    : p33/p67 breaks drawn on plot for comparison
 
     Returns
     -------
-    dict  {category: {"economy_cap": int, "mid_cap": int}, "_default": {...}}
+    (economy_cap, mid_cap) as floats, or (None, None) if < 2 valleys found.
     """
+    from scipy.stats import gaussian_kde
+    from scipy.signal import argrelmin
+
+    if len(mrp_values) < 10:
+        return None, None
+
+    kde = gaussian_kde(mrp_values, bw_method="scott")
+    x_grid = np.linspace(mrp_values.min(), mrp_values.max(), 500)
+    density = kde(x_grid)
+
+    # order=20: valley must be lower than 20 neighbors on each side
+    # With 500 pts over typical Rs 500-5000 range → ~180 Rs buffer each side
+    minima_idx = argrelmin(density, order=20)[0]
+
+    economy_cap, mid_cap = None, None
+    if len(minima_idx) >= 2:
+        # Take the 2 deepest valleys (lowest density = biggest price gap)
+        sorted_by_depth = sorted(minima_idx, key=lambda i: density[i])
+        top2 = sorted(sorted_by_depth[:2])          # sort back by MRP value
+        economy_cap = float(x_grid[top2[0]])
+        mid_cap     = float(x_grid[top2[1]])
+
+    # ── Save KDE plot ─────────────────────────────────────────────────────
+    if plot_path is not None:
+        import matplotlib
+        matplotlib.use("Agg")                        # non-interactive backend
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots(figsize=(10, 4))
+        ax.fill_between(x_grid, density, alpha=0.25, color="#f59e0b")
+        ax.plot(x_grid, density, color="#f59e0b", linewidth=1.8, label="KDE density")
+
+        # Rug plot — actual style MRPs
+        ax.plot(mrp_values, np.full_like(mrp_values, -0.00002),
+                "|", color="#94a3b8", alpha=0.5, markersize=6, label=f"Styles (n={len(mrp_values)})")
+
+        # KDE valleys
+        if economy_cap is not None:
+            ax.axvline(economy_cap, color="#10b981", linewidth=1.8, linestyle="--",
+                       label=f"KDE Economy cap  ₹{economy_cap:,.0f}")
+            ax.axvline(mid_cap,     color="#3b82f6", linewidth=1.8, linestyle="--",
+                       label=f"KDE Mid cap      ₹{mid_cap:,.0f}")
+
+        # p33/p67 comparison
+        if p33_cap is not None:
+            ax.axvline(p33_cap, color="#10b981", linewidth=1.2, linestyle=":",
+                       alpha=0.7, label=f"p33 Economy cap  ₹{p33_cap:,.0f}")
+            ax.axvline(p67_cap, color="#3b82f6", linewidth=1.2, linestyle=":",
+                       alpha=0.7, label=f"p67 Mid cap      ₹{p67_cap:,.0f}")
+
+        # Mark all found valleys
+        for idx in minima_idx:
+            ax.plot(x_grid[idx], density[idx], "v", color="#ef4444", markersize=7, alpha=0.7)
+
+        ax.set_title(f"MRP Distribution — {category}  |  KDE Price Break Detection",
+                     fontsize=13, pad=10)
+        ax.set_xlabel("MRP (₹)", fontsize=11)
+        ax.set_ylabel("Density", fontsize=11)
+        ax.legend(fontsize=9, loc="upper right")
+        ax.set_facecolor("#0f172a")
+        fig.patch.set_facecolor("#1e293b")
+        ax.tick_params(colors="#94a3b8")
+        ax.xaxis.label.set_color("#94a3b8")
+        ax.yaxis.label.set_color("#94a3b8")
+        ax.title.set_color("#e2e8f0")
+        for spine in ax.spines.values():
+            spine.set_edgecolor("#334155")
+        ax.grid(axis="x", color="#334155", linewidth=0.5, linestyle="--")
+
+        fig.tight_layout()
+        fig.savefig(plot_path, dpi=120, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
+        plt.close(fig)
+
+    return economy_cap, mid_cap
+
+
+# ── Priceband computation ─────────────────────────────────────────────────────
+
+def compute_priceband_breaks(
+    mrp_dist_df: pd.DataFrame,
+    style_mrp_df: pd.DataFrame = None,
+    plot_dir: Path = None,
+) -> dict:
+    """
+    Compute data-driven priceband break points per category.
+
+    Primary method: KDE on deduplicated style-level MRPs — finds natural price
+    gaps (valleys in density curve). Uses the 2 deepest valleys as Economy and
+    Mid caps. Falls back to p33/p67 when KDE cannot find 2 valleys (too few
+    styles or unimodal distribution).
+
+    Both KDE and p33/p67 breaks are stored in the returned dict for CSV export.
+
+    Parameters
+    ----------
+    mrp_dist_df : DataFrame with p33, p67 per category (from _MRP_DIST_SQL)
+    style_mrp_df: DataFrame with (category, style_code, avg_mrp) — one row per
+                  style, deduplicated fleet-wide (from _MRP_STYLE_SQL).
+                  If None, falls back to p33/p67 for all categories.
+    plot_dir    : if provided, saves one KDE PNG per category here.
+
+    Returns
+    -------
+    dict  {category: {economy_cap, mid_cap, p33_economy_cap, p67_mid_cap,
+                      kde_economy_cap, kde_mid_cap, method}, "_default": {...}}
+    """
+    if plot_dir is not None:
+        plot_dir = Path(plot_dir)
+        plot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Index style MRPs by category for fast lookup
+    style_by_cat = {}
+    if style_mrp_df is not None:
+        for cat, grp in style_mrp_df.groupby("category"):
+            style_by_cat[cat] = grp["avg_mrp"].dropna().values
+
     breaks = {}
     for _, row in mrp_dist_df.iterrows():
         cat = row["category"]
-        economy_cap = int(round(float(row["p33"]) / 500) * 500)
-        mid_cap     = int(round(float(row["p67"]) / 500) * 500)
-        economy_cap = max(economy_cap, 500)
-        if mid_cap <= economy_cap:
-            mid_cap = economy_cap + 500
-        breaks[cat] = {"economy_cap": economy_cap, "mid_cap": mid_cap}
 
-    breaks["_default"] = {"economy_cap": 2000, "mid_cap": 3000}
+        # ── p33/p67 breaks (rounded to nearest Rs 500) ───────────────────
+        p33_cap = int(round(float(row["p33"]) / 500) * 500)
+        p67_cap = int(round(float(row["p67"]) / 500) * 500)
+        p33_cap = max(p33_cap, 500)
+        if p67_cap <= p33_cap:
+            p67_cap = p33_cap + 500
+
+        # ── KDE breaks ───────────────────────────────────────────────────
+        mrp_arr = style_by_cat.get(cat, np.array([]))
+        plot_path = (plot_dir / f"kde_{cat.replace(' ', '_').replace('/', '_')}.png"
+                     if plot_dir is not None else None)
+
+        kde_eco, kde_mid = _kde_breaks_for_category(
+            mrp_arr,
+            plot_path=plot_path,
+            category=cat,
+            p33_cap=p33_cap,
+            p67_cap=p67_cap,
+        )
+
+        if kde_eco is not None:
+            economy_cap = kde_eco
+            mid_cap     = kde_mid
+            method      = "KDE"
+        else:
+            economy_cap = p33_cap
+            mid_cap     = p67_cap
+            method      = "p33/p67_fallback"
+
+        breaks[cat] = {
+            "economy_cap":     economy_cap,   # used for classification
+            "mid_cap":         mid_cap,
+            "p33_economy_cap": p33_cap,
+            "p67_mid_cap":     p67_cap,
+            "kde_economy_cap": round(kde_eco, 2) if kde_eco is not None else None,
+            "kde_mid_cap":     round(kde_mid, 2) if kde_mid is not None else None,
+            "method":          method,
+        }
+
+    breaks["_default"] = {
+        "economy_cap": 2000, "mid_cap": 3000,
+        "p33_economy_cap": 2000, "p67_mid_cap": 3000,
+        "kde_economy_cap": None, "kde_mid_cap": None,
+        "method": "default",
+    }
     return breaks
 
 
@@ -644,6 +851,22 @@ def fetch_mrp_distribution() -> pd.DataFrame:
         conn.close()
 
 
+def fetch_style_mrp() -> pd.DataFrame:
+    """
+    Fetch deduplicated style-level MRP data for KDE price break detection.
+    Returns one row per style × category (fleet-wide — store dimension collapsed).
+    Each style counts once so popular styles don't inflate the KDE density.
+    """
+    conn = connect()
+    try:
+        print("Fetching deduplicated style-level MRP for KDE...")
+        df = pd.read_sql(_MRP_STYLE_SQL, conn)
+        print(f"  {len(df):,} style-category rows fetched ({df['category'].nunique()} categories).")
+        return df
+    finally:
+        conn.close()
+
+
 def fetch_eda_dataset(breaks: dict = None) -> pd.DataFrame:
     """
     Fetch style-level data from Fabric, apply per-category priceband classification,
@@ -730,14 +953,23 @@ if __name__ == "__main__":
 
     today = date.today().isoformat()
 
-    # ── Step 1: MRP distribution -> data-driven priceband breaks ─────────
-    print("Step 1/2  MRP price distribution per category...")
+    # ── Step 1: MRP distribution + KDE price break detection ─────────────
+    print("Step 1/3  MRP price distribution per category...")
     mrp_df   = fetch_mrp_distribution()
     mrp_path = out_dir / f"mrp_distribution_{today}.csv"
     mrp_df.to_csv(mrp_path, index=False)
     print(f"  Saved: {mrp_path.name}")
 
-    breaks = compute_priceband_breaks(mrp_df)
+    print("Step 1b/3  Deduplicated style MRPs for KDE...")
+    style_mrp_df = fetch_style_mrp()
+
+    kde_plot_dir = out_dir / "kde_plots"
+    breaks = compute_priceband_breaks(mrp_df, style_mrp_df, plot_dir=kde_plot_dir)
+
+    kde_count = sum(1 for v in breaks.values() if v.get("method") == "KDE")
+    fb_count  = sum(1 for v in breaks.values() if "fallback" in v.get("method", ""))
+    print(f"  KDE breaks: {kde_count} categories | p33/p67 fallback: {fb_count} categories")
+    print(f"  KDE plots saved to: {kde_plot_dir}/")
 
     # Save JSON config (loaded by app and fetch_eda_dataset)
     config_path = out_dir / "priceband_config.json"
@@ -745,26 +977,38 @@ if __name__ == "__main__":
         json.dump({"generated_on": today, "breaks": breaks}, fh, indent=2)
     print(f"  Priceband config saved: {config_path.name}")
 
-    # Save human-readable CSV mapping
+    # Save human-readable CSV mapping — both KDE and p33/p67 breaks
     mapping_rows = [
-        {"category": cat, "economy_cap": v["economy_cap"], "mid_cap": v["mid_cap"]}
+        {
+            "category":        cat,
+            "economy_cap":     v["economy_cap"],
+            "mid_cap":         v["mid_cap"],
+            "method":          v["method"],
+            "kde_economy_cap": v["kde_economy_cap"],
+            "kde_mid_cap":     v["kde_mid_cap"],
+            "p33_economy_cap": v["p33_economy_cap"],
+            "p67_mid_cap":     v["p67_mid_cap"],
+        }
         for cat, v in sorted(breaks.items())
     ]
     pd.DataFrame(mapping_rows).to_csv(out_dir / "priceband_mapping.csv", index=False)
     print(f"  Priceband mapping CSV saved: priceband_mapping.csv")
 
-    print(f"\n  {'Category':<25} {'Economy cap':>12}  {'Mid cap':>10}")
-    print(f"  {'-'*52}")
+    print(f"\n  {'Category':<25} {'Method':<18} {'Economy cap':>14}  {'Mid cap':>12}")
+    print(f"  {'-'*72}")
     for cat, b in sorted((k, v) for k, v in breaks.items() if k != "_default"):
-        print(f"  {cat:<25} <= Rs {b['economy_cap']:>6,}  <= Rs {b['mid_cap']:>6,}")
+        eco = b['economy_cap']
+        mid = b['mid_cap']
+        eco_str = f"Rs {eco:>8,.0f}" if isinstance(eco, float) else f"Rs {eco:>8,}"
+        mid_str = f"Rs {mid:>8,.0f}" if isinstance(mid, float) else f"Rs {mid:>8,}"
+        print(f"  {cat:<25} {b['method']:<18} {eco_str}  {mid_str}")
     print(
-        f"  {'_default (fallback)':<25} <= Rs "
-        f"{breaks['_default']['economy_cap']:>6,}  <= Rs "
-        f"{breaks['_default']['mid_cap']:>6,}"
+        f"  {'_default (fallback)':<25} {'default':<18} "
+        f"Rs {breaks['_default']['economy_cap']:>8,}  Rs {breaks['_default']['mid_cap']:>8,}"
     )
 
-    # ── Step 2: EDA dataset with data-driven pricebands ──────────────────
-    print(f"\nStep 2/2  EDA dataset with per-category pricebands...")
+    # ── Step 2: EDA dataset with KDE pricebands ──────────────────────────
+    print(f"\nStep 2/3  EDA dataset with KDE per-category pricebands...")
     df = fetch_eda_dataset(breaks)
 
     out_path = out_dir / f"eda_data_{today}.csv"
@@ -779,6 +1023,7 @@ if __name__ == "__main__":
 
     # ── Step 3: Size break monitor ────────────────────────────────────────
     print(f"\nStep 3/3  Size break monitor (latest SOH snapshot)...")
+
     sb_df = fetch_size_breaks()
     sb_path = out_dir / "size_breaks_latest.csv"
     sb_df.to_csv(sb_path, index=False)
