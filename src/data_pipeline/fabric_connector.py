@@ -428,85 +428,163 @@ def _kde_breaks_for_category(
     category: str = "",
     p33_cap: float = None,
     p67_cap: float = None,
+    min_peak_ratio: float = 1.5,
 ) -> tuple:
     """
-    Find 2 natural valley points in MRP distribution using Kernel Density Estimation.
+    Find 2 price break points in MRP distribution using KDE.
 
-    Strategy: fit KDE with Scott's bandwidth, evaluate on 500-point grid,
-    find local minima (order=20 ≈ 180 Rs buffer each side), pick the 2 with
-    the lowest density (deepest valleys = most significant price gaps).
+    Strategy
+    --------
+    1. Fit KDE (Scott's bandwidth), evaluate on 500-point grid.
+    2. Find all local minima (order=10) and maxima (order=10).
+    3. Filter minima: keep only those with a significant peak on BOTH sides
+       (nearest left peak AND nearest right peak must be >= min_peak_ratio x
+       valley density). This eliminates tail minima — the tails always have
+       the lowest density but no real price cluster on the outer side.
+    4. From valid inter-cluster valleys, pick the 2 that create the most
+       balanced 3-way split of styles (minimise max deviation from equal thirds).
+    5. Fall back to (None, None) if < 2 valid valleys found.
 
     Parameters
     ----------
-    mrp_values : array of style-level MRP values (one per style, deduplicated)
-    plot_path  : if provided, save KDE chart as PNG here
-    category   : category name for plot title
-    p33_cap    : p33/p67 breaks drawn on plot for comparison
-    p67_cap    : p33/p67 breaks drawn on plot for comparison
+    mrp_values     : deduplicated style-level MRP array (one per style)
+    plot_path      : save annotated PNG here if provided
+    category       : category name for plot title
+    p33_cap/p67_cap: drawn on plot for comparison
+    min_peak_ratio : neighboring peak must be >= this x valley density (default 1.5)
 
     Returns
     -------
-    (economy_cap, mid_cap) as floats, or (None, None) if < 2 valleys found.
+    (economy_cap, mid_cap) as floats, or (None, None) if fallback needed.
     """
     from scipy.stats import gaussian_kde
-    from scipy.signal import argrelmin
+    from scipy.signal import argrelmin, argrelmax
 
     if len(mrp_values) < 10:
         return None, None
 
-    kde = gaussian_kde(mrp_values, bw_method="scott")
+    kde    = gaussian_kde(mrp_values, bw_method="scott")
     x_grid = np.linspace(mrp_values.min(), mrp_values.max(), 500)
     density = kde(x_grid)
 
-    # order=20: valley must be lower than 20 neighbors on each side
-    # With 500 pts over typical Rs 500-5000 range → ~180 Rs buffer each side
-    minima_idx = argrelmin(density, order=20)[0]
+    # order=10: point must be extreme over 10 neighbors each side (~90 Rs at
+    # typical Rs 500-5000 range). Smaller order = more candidates to filter.
+    minima_idx = argrelmin(density, order=10)[0]
+    maxima_idx = argrelmax(density, order=10)[0]
 
+    # ── Filter: keep only inter-cluster valleys (peak on both sides) ─────
+    valid_minima = []
+    rejected_minima = []
+    for v_idx in minima_idx:
+        left_peaks  = maxima_idx[maxima_idx < v_idx]
+        right_peaks = maxima_idx[maxima_idx > v_idx]
+
+        if len(left_peaks) == 0 or len(right_peaks) == 0:
+            rejected_minima.append(v_idx)   # tail — no cluster on one side
+            continue
+
+        left_peak_density  = density[left_peaks[-1]]   # nearest left peak
+        right_peak_density = density[right_peaks[0]]   # nearest right peak
+        valley_density     = density[v_idx]
+
+        if (left_peak_density  >= valley_density * min_peak_ratio and
+                right_peak_density >= valley_density * min_peak_ratio):
+            valid_minima.append(v_idx)
+        else:
+            rejected_minima.append(v_idx)
+
+    # ── Pick 2 most balanced valid valleys ────────────────────────────────
     economy_cap, mid_cap = None, None
-    if len(minima_idx) >= 2:
-        # Take the 2 deepest valleys (lowest density = biggest price gap)
-        sorted_by_depth = sorted(minima_idx, key=lambda i: density[i])
-        top2 = sorted(sorted_by_depth[:2])          # sort back by MRP value
-        economy_cap = float(x_grid[top2[0]])
-        mid_cap     = float(x_grid[top2[1]])
+    chosen_pair = None
+
+    if len(valid_minima) >= 2:
+        n = len(mrp_values)
+        best_score = float("inf")
+
+        for i in range(len(valid_minima)):
+            for j in range(i + 1, len(valid_minima)):
+                v1 = x_grid[valid_minima[i]]
+                v2 = x_grid[valid_minima[j]]
+                c1 = int((mrp_values <= v1).sum())
+                c2 = int(((mrp_values > v1) & (mrp_values <= v2)).sum())
+                c3 = int((mrp_values > v2).sum())
+                # Score = max deviation from equal thirds (lower = more balanced)
+                target = n / 3.0
+                score  = max(abs(c1 - target), abs(c2 - target), abs(c3 - target))
+                if score < best_score:
+                    best_score  = score
+                    chosen_pair = (valid_minima[i], valid_minima[j])
+
+        economy_cap = float(x_grid[chosen_pair[0]])
+        mid_cap     = float(x_grid[chosen_pair[1]])
 
     # ── Save KDE plot ─────────────────────────────────────────────────────
     if plot_path is not None:
         import matplotlib
-        matplotlib.use("Agg")                        # non-interactive backend
+        matplotlib.use("Agg")
         import matplotlib.pyplot as plt
 
-        fig, ax = plt.subplots(figsize=(10, 4))
-        ax.fill_between(x_grid, density, alpha=0.25, color="#f59e0b")
+        fig, ax = plt.subplots(figsize=(11, 4))
+        ax.fill_between(x_grid, density, alpha=0.2, color="#f59e0b")
         ax.plot(x_grid, density, color="#f59e0b", linewidth=1.8, label="KDE density")
 
-        # Rug plot — actual style MRPs
-        ax.plot(mrp_values, np.full_like(mrp_values, -0.00002),
-                "|", color="#94a3b8", alpha=0.5, markersize=6, label=f"Styles (n={len(mrp_values)})")
+        # Rug plot
+        ax.plot(mrp_values, np.full_like(mrp_values, -density.max() * 0.03),
+                "|", color="#94a3b8", alpha=0.5, markersize=6,
+                label=f"Styles (n={len(mrp_values)})")
 
-        # KDE valleys
+        # Mark peaks
+        for p_idx in maxima_idx:
+            ax.plot(x_grid[p_idx], density[p_idx], "^",
+                    color="#a78bfa", markersize=6, alpha=0.7)
+
+        # Rejected valleys (grey)
+        for v_idx in rejected_minima:
+            ax.plot(x_grid[v_idx], density[v_idx], "v",
+                    color="#64748b", markersize=7, alpha=0.6,
+                    label="_nolegend_")
+        if rejected_minima:
+            ax.plot([], [], "v", color="#64748b", markersize=7,
+                    label="Rejected valley (tail)")
+
+        # Valid valleys not chosen
+        for v_idx in valid_minima:
+            if chosen_pair and v_idx not in chosen_pair:
+                ax.plot(x_grid[v_idx], density[v_idx], "v",
+                        color="#fb923c", markersize=7, alpha=0.8,
+                        label="_nolegend_")
+        unused_valid = [v for v in valid_minima
+                        if chosen_pair is None or v not in chosen_pair]
+        if unused_valid:
+            ax.plot([], [], "v", color="#fb923c", markersize=7,
+                    label="Valid valley (not chosen)")
+
+        # Chosen KDE breaks
         if economy_cap is not None:
-            ax.axvline(economy_cap, color="#10b981", linewidth=1.8, linestyle="--",
-                       label=f"KDE Economy cap  ₹{economy_cap:,.0f}")
-            ax.axvline(mid_cap,     color="#3b82f6", linewidth=1.8, linestyle="--",
-                       label=f"KDE Mid cap      ₹{mid_cap:,.0f}")
+            n = len(mrp_values)
+            c1 = int((mrp_values <= economy_cap).sum())
+            c2 = int(((mrp_values > economy_cap) & (mrp_values <= mid_cap)).sum())
+            c3 = int((mrp_values > mid_cap).sum())
+            ax.axvline(economy_cap, color="#10b981", linewidth=2.0, linestyle="--",
+                       label=f"KDE Economy cap  ₹{economy_cap:,.0f}  ({c1} styles)")
+            ax.axvline(mid_cap,     color="#3b82f6", linewidth=2.0, linestyle="--",
+                       label=f"KDE Mid cap      ₹{mid_cap:,.0f}  ({c2} / {c3} styles)")
 
         # p33/p67 comparison
         if p33_cap is not None:
             ax.axvline(p33_cap, color="#10b981", linewidth=1.2, linestyle=":",
-                       alpha=0.7, label=f"p33 Economy cap  ₹{p33_cap:,.0f}")
+                       alpha=0.6, label=f"p33              ₹{p33_cap:,.0f}")
             ax.axvline(p67_cap, color="#3b82f6", linewidth=1.2, linestyle=":",
-                       alpha=0.7, label=f"p67 Mid cap      ₹{p67_cap:,.0f}")
+                       alpha=0.6, label=f"p67              ₹{p67_cap:,.0f}")
 
-        # Mark all found valleys
-        for idx in minima_idx:
-            ax.plot(x_grid[idx], density[idx], "v", color="#ef4444", markersize=7, alpha=0.7)
-
-        ax.set_title(f"MRP Distribution — {category}  |  KDE Price Break Detection",
-                     fontsize=13, pad=10)
-        ax.set_xlabel("MRP (₹)", fontsize=11)
-        ax.set_ylabel("Density", fontsize=11)
-        ax.legend(fontsize=9, loc="upper right")
+        method_tag = "KDE" if economy_cap is not None else "p33/p67 fallback"
+        ax.set_title(
+            f"MRP Distribution — {category}  |  Price Break Detection  [{method_tag}]",
+            fontsize=12, pad=10,
+        )
+        ax.set_xlabel("MRP (₹)", fontsize=10)
+        ax.set_ylabel("Density", fontsize=10)
+        ax.legend(fontsize=8, loc="upper right", framealpha=0.3)
         ax.set_facecolor("#0f172a")
         fig.patch.set_facecolor("#1e293b")
         ax.tick_params(colors="#94a3b8")
@@ -516,7 +594,6 @@ def _kde_breaks_for_category(
         for spine in ax.spines.values():
             spine.set_edgecolor("#334155")
         ax.grid(axis="x", color="#334155", linewidth=0.5, linestyle="--")
-
         fig.tight_layout()
         fig.savefig(plot_path, dpi=120, bbox_inches="tight",
                     facecolor=fig.get_facecolor())
